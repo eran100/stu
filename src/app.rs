@@ -66,6 +66,8 @@ pub struct App<C: Client> {
 
     notification: Notification,
     is_loading: bool,
+
+    clipboard: Option<(ObjectKey, ObjectItem)>,
 }
 
 impl<C: Client> App<C> {
@@ -80,6 +82,7 @@ impl<C: Client> App<C> {
             tx,
             notification: Notification::None,
             is_loading: true,
+            clipboard: None,
         }
     }
 
@@ -818,6 +821,121 @@ impl<C: Client> App<C> {
                 self.tx.send(AppEventType::NotifyError(e));
             }
         }
+    }
+
+    pub fn copy_object(&mut self, object_key: ObjectKey, object_item: ObjectItem) {
+        self.clipboard = Some((object_key.clone(), object_item.clone()));
+        let name = object_item.name().to_string();
+        let msg = format!("Copied '{name}' to clipboard");
+        self.success_notification(msg);
+    }
+
+    pub fn start_paste_object(&mut self, dest_dir_key: ObjectKey) {
+        let Some((src_key_base, item)) = &self.clipboard else {
+            self.warn_notification("Clipboard is empty".to_string());
+            return;
+        };
+
+        match item {
+            ObjectItem::Dir { name, key, .. } => {
+                let src_bucket = src_key_base.bucket_name.clone();
+                let src_key = key.clone(); // expected to end with '/'
+                let dst_bucket = dest_dir_key.bucket_name.clone();
+                let mut dst_key = dest_dir_key.joined_object_path(false);
+                dst_key.push_str(name);
+                if !dst_key.ends_with('/') {
+                    dst_key.push('/');
+                }
+
+                let spec = crate::event::PasteSpec {
+                    src_bucket,
+                    src_key,
+                    dst_bucket,
+                    dst_key,
+                    name: name.clone(),
+                };
+                self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
+            }
+            ObjectItem::File { name, key, .. } => {
+                let src_bucket = src_key_base.bucket_name.clone();
+                let src_key = key.clone();
+                let dst_bucket = dest_dir_key.bucket_name.clone();
+                let mut dst_key = dest_dir_key.joined_object_path(false);
+                dst_key.push_str(name);
+
+                let spec = crate::event::PasteSpec {
+                    src_bucket,
+                    src_key,
+                    dst_bucket,
+                    dst_key,
+                    name: name.clone(),
+                };
+                self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
+            }
+        }
+    }
+
+    pub fn open_paste_confirm_dialog(&mut self, spec: crate::event::PasteSpec) {
+        match self.page_stack.current_page_mut() {
+            Page::ObjectList(page) => {
+                page.open_paste_confirm_dialog(spec);
+            }
+            page => panic!("Invalid page for paste confirm: {page:?}"),
+        }
+    }
+
+    pub fn paste_object(&mut self, spec: crate::event::PasteSpec) {
+        self.is_loading = true;
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        // show loading UI during copy
+        // (note: caller should set is_loading; keep logic here simple)
+        tokio::spawn(async move {
+            let result = if spec.src_key.ends_with('/') {
+                let progress_tx = tx.clone();
+                client
+                    .copy_prefix(
+                        &spec.src_bucket,
+                        &spec.src_key,
+                        &spec.dst_bucket,
+                        &spec.dst_key,
+                        move |cur, total| {
+                            let msg = format!("Copied {}/{} objects...", cur, total);
+                            progress_tx.send(AppEventType::NotifyInfo(msg));
+                        },
+                    )
+                    .await
+            } else {
+                client
+                    .copy_object(
+                        &spec.src_bucket,
+                        &spec.src_key,
+                        &spec.dst_bucket,
+                        &spec.dst_key,
+                    )
+                    .await
+            };
+            let result = crate::event::CompletePasteObjectResult::new(result, spec.name.clone());
+            tx.send(AppEventType::CompletePasteObject(result));
+        });
+    }
+
+    pub fn complete_paste_object(
+        &mut self,
+        result: Result<crate::event::CompletePasteObjectResult>,
+    ) {
+        match result {
+            Ok(crate::event::CompletePasteObjectResult { name }) => {
+                let msg = format!("Copied '{name}' successfully");
+                self.success_notification(msg);
+                // Refresh current object list
+                self.tx.send(AppEventType::ObjectListRefresh);
+            }
+            Err(e) => {
+                self.tx.send(AppEventType::NotifyError(e));
+            }
+        }
+        self.is_loading = false;
     }
 
     pub fn loading(&self) -> bool {

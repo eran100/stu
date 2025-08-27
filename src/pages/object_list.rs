@@ -57,6 +57,7 @@ enum ViewState {
     CopyDetailDialog(Box<CopyDetailDialogState>),
     DownloadConfirmDialog(Vec<DownloadObjectInfo>, ConfirmDialogState, bool),
     SaveDialog(InputDialogState, Option<Vec<DownloadObjectInfo>>),
+    PasteConfirmDialog(crate::event::PasteSpec, ConfirmDialogState),
 }
 
 impl ObjectListPage {
@@ -124,6 +125,15 @@ impl ObjectListPage {
                     UserEvent::ObjectListSort => {
                         self.open_sort_dialog();
                     }
+                    UserEvent::ObjectListCopyObject if self.non_empty() => {
+                        let object_key = self.current_selected_object_key();
+                        let object_item = self.current_selected_item().to_owned();
+                        self.tx.send(AppEventType::CopyObject(object_key, object_item));
+                    }
+                    UserEvent::ObjectListPasteObject => {
+                        let dest_dir = self.current_dir_object_key().clone();
+                        self.tx.send(AppEventType::StartPasteObject(dest_dir));
+                    }
                     UserEvent::ObjectListCopyDetails if self.non_empty() => {
                         self.open_copy_detail_dialog();
                     }
@@ -171,6 +181,22 @@ impl ObjectListPage {
                     }
                     UserEvent::SelectDialogSelect => {
                         self.apply_sort();
+                    }
+                    UserEvent::Help => {
+                        self.tx.send(AppEventType::OpenHelp);
+                    }
+                }
+            }
+            ViewState::PasteConfirmDialog(_, ref mut _state) => {
+                handle_user_events! { user_events =>
+                    UserEvent::SelectDialogClose => {
+                        self.close_paste_confirm_dialog();
+                    }
+                    UserEvent::SelectDialogLeft | UserEvent::SelectDialogRight => {
+                        _state.toggle();
+                    }
+                    UserEvent::SelectDialogSelect => {
+                        self.paste();
                     }
                     UserEvent::Help => {
                         self.tx.send(AppEventType::OpenHelp);
@@ -279,6 +305,12 @@ impl ObjectListPage {
             f.render_stateful_widget(download_confirm_dialog, area, state);
         }
 
+        if let ViewState::PasteConfirmDialog(spec, state) = &mut self.view_state {
+            let lines = build_paste_confirm_message_lines(spec, &self.ctx.theme);
+            let confirm_dialog = ConfirmDialog::new(lines).theme(&self.ctx.theme);
+            f.render_stateful_widget(confirm_dialog, area, state);
+        }
+
         if let ViewState::SaveDialog(state, _) = &mut self.view_state {
             let save_dialog = InputDialog::default()
                 .title("Save As")
@@ -311,6 +343,8 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListCopyObject, "Copy selection"),
+                        BuildHelpsItem::new(UserEvent::ObjectListPasteObject, "Paste to current dir"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyDetails, "Open copy dialog"),
                         BuildHelpsItem::new(UserEvent::ObjectListRefresh, "Refresh object list"),
                         BuildHelpsItem::new(UserEvent::ObjectListManagementConsole, "Open management console in browser"),
@@ -332,6 +366,8 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListCopyObject, "Copy selection"),
+                        BuildHelpsItem::new(UserEvent::ObjectListPasteObject, "Paste to current dir"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyDetails, "Open copy dialog"),
                         BuildHelpsItem::new(UserEvent::ObjectListRefresh, "Refresh object list"),
                         BuildHelpsItem::new(UserEvent::ObjectListManagementConsole, "Open management console in browser"),
@@ -372,6 +408,15 @@ impl ObjectListPage {
                     BuildHelpsItem::new(UserEvent::SelectDialogSelect, "Confirm"),
                 ]
             }
+            ViewState::PasteConfirmDialog(_, _) => {
+                vec![
+                    BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogClose, "Close confirm dialog"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogRight, "Select next"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogLeft, "Select previous"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogSelect, "Confirm"),
+                ]
+            }
             ViewState::SaveDialog(_, _) => {
                 vec![
                     BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
@@ -397,6 +442,8 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 7),
                         BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
@@ -410,6 +457,8 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 7),
                         BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
@@ -439,6 +488,14 @@ impl ObjectListPage {
                 ]
             },
             ViewState::DownloadConfirmDialog(_, _, _) => {
+                vec![
+                    BuildShortHelpsItem::single(UserEvent::SelectDialogClose, "Close", 2),
+                    BuildShortHelpsItem::group(vec![UserEvent::SelectDialogLeft, UserEvent::SelectDialogRight], "Select", 3),
+                    BuildShortHelpsItem::single(UserEvent::SelectDialogSelect, "Confirm", 1),
+                    BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
+                ]
+            },
+            ViewState::PasteConfirmDialog(_, _) => {
                 vec![
                     BuildShortHelpsItem::single(UserEvent::SelectDialogClose, "Close", 2),
                     BuildShortHelpsItem::group(vec![UserEvent::SelectDialogLeft, UserEvent::SelectDialogRight], "Select", 3),
@@ -609,6 +666,15 @@ impl ObjectListPage {
         self.view_state = ViewState::Default;
     }
 
+    pub fn open_paste_confirm_dialog(&mut self, spec: crate::event::PasteSpec) {
+        let dialog_state = ConfirmDialogState::default();
+        self.view_state = ViewState::PasteConfirmDialog(spec, dialog_state);
+    }
+
+    fn close_paste_confirm_dialog(&mut self) {
+        self.view_state = ViewState::Default;
+    }
+
     fn start_download(&self) {
         match self.current_selected_item() {
             ObjectItem::Dir { .. } => {
@@ -705,6 +771,16 @@ impl ObjectListPage {
         let object_key = self.current_dir_object_key().clone();
         self.tx
             .send(AppEventType::ObjectListOpenManagementConsole(object_key));
+    }
+
+    fn paste(&mut self) {
+        if let ViewState::PasteConfirmDialog(spec, state) = &mut self.view_state {
+            if state.is_ok() {
+                let spec = spec.clone();
+                self.tx.send(AppEventType::PasteObject(spec));
+            }
+            self.close_paste_confirm_dialog();
+        }
     }
 
     pub fn current_selected_item(&self) -> &ObjectItem {
@@ -914,6 +990,24 @@ fn build_download_confirm_message_lines<'a>(
         Line::from(size_message.fg(theme.fg).bold()),
         Line::from(""),
         Line::from("This operation may take some time. Do you want to proceed?".fg(theme.fg)),
+    ]
+}
+
+fn build_paste_confirm_message_lines<'a>(
+    spec: &crate::event::PasteSpec,
+    theme: &ColorTheme,
+) -> Vec<Line<'a>> {
+    let from = format!("s3://{}/{}", spec.src_bucket, spec.src_key);
+    let to = format!("s3://{}/{}", spec.dst_bucket, spec.dst_key);
+    vec![
+        Line::from("You are about to copy the following object:".fg(theme.fg)),
+        Line::from(""),
+        Line::from(from.fg(theme.fg).bold()),
+        Line::from(""),
+        Line::from("Destination:".fg(theme.fg)),
+        Line::from(to.fg(theme.fg).bold()),
+        Line::from(""),
+        Line::from("Do you want to proceed?".fg(theme.fg)),
     ]
 }
 

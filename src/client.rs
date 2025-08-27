@@ -11,6 +11,7 @@ use aws_sdk_s3::{
     operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output},
 };
 use chrono::TimeZone;
+use futures::StreamExt;
 
 use crate::{
     error::{AppError, Result},
@@ -45,6 +46,15 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn load_object_versions(&self, bucket: &str, key: &str) -> impl Future<Output = Result<Vec<FileVersion>>> + Send;
     fn download_object<W: std::io::Write + Send, F: Fn(usize) + Send>(&self, bucket: &str, key: &str, version_id: Option<String>, writer: &mut BufWriter<W>, f: F) -> impl Future<Output = Result<()>> + Send;
     fn list_all_download_objects(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<Vec<DownloadObjectInfo>>> + Send;
+    fn copy_object(&self, src_bucket: &str, src_key: &str, dst_bucket: &str, dst_key: &str) -> impl Future<Output = Result<()>> + Send;
+    fn copy_prefix<F: Fn(usize, usize) + Send>(
+        &self,
+        src_bucket: &str,
+        src_prefix: &str,
+        dst_bucket: &str,
+        dst_prefix: &str,
+        f: F,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
@@ -354,6 +364,104 @@ impl Client for AwsSdkClient {
         }
 
         Ok(objs)
+    }
+
+    async fn copy_object(
+        &self,
+        src_bucket: &str,
+        src_key: &str,
+        dst_bucket: &str,
+        dst_key: &str,
+    ) -> Result<()> {
+        // S3 CopyObject requires a CopySource of the form "{bucket}/{key}".
+        // The SDK accepts a String and handles necessary header wiring.
+        let copy_source = format!("{}/{}", src_bucket, src_key);
+        let result = self
+            .client
+            .copy_object()
+            .bucket(dst_bucket)
+            .key(dst_key)
+            .copy_source(copy_source)
+            .send()
+            .await;
+
+        result
+            .map(|_| ())
+            .map_err(|e| AppError::new("Failed to copy object", e))
+    }
+
+    async fn copy_prefix<F: Fn(usize, usize) + Send>(
+        &self,
+        src_bucket: &str,
+        src_prefix: &str,
+        dst_bucket: &str,
+        dst_prefix: &str,
+        f: F,
+    ) -> Result<()> {
+        // Normalize prefixes to end with '/'
+        let src_prefix = if src_prefix.ends_with('/') {
+            src_prefix.to_string()
+        } else {
+            format!("{}/", src_prefix)
+        };
+        let dst_prefix = if dst_prefix.ends_with('/') {
+            dst_prefix.to_string()
+        } else {
+            format!("{}/", dst_prefix)
+        };
+
+        let objs = self
+            .list_all_download_objects(src_bucket, &src_prefix)
+            .await?;
+        let total_count = objs.len();
+
+        // Limit concurrent copy operations to a reasonable number.
+        let max_concurrent_requests: usize = 8;
+        let s3 = self.client.clone();
+        let src_bucket = src_bucket.to_string();
+        let dst_bucket = dst_bucket.to_string();
+
+        let mut iter = futures::stream::iter(objs.into_iter().map(|obj| {
+            let s3 = s3.clone();
+            let src_bucket = src_bucket.clone();
+            let dst_bucket = dst_bucket.clone();
+            let src_prefix = src_prefix.clone();
+            let dst_prefix = dst_prefix.clone();
+            async move {
+                // Compute destination key preserving the suffix relative to src_prefix
+                let suffix = obj
+                    .key
+                    .strip_prefix(&src_prefix)
+                    .unwrap_or(&obj.key)
+                    .to_string();
+                let dst_key = format!("{}{}", dst_prefix, suffix);
+                let copy_source = format!("{}/{}", src_bucket, obj.key);
+                let result = s3
+                    .copy_object()
+                    .bucket(&dst_bucket)
+                    .key(&dst_key)
+                    .copy_source(copy_source)
+                    .send()
+                    .await;
+                result
+                    .map(|_| ())
+                    .map_err(|e| AppError::new("Failed to copy object", e))
+            }
+        }))
+        .buffered(max_concurrent_requests);
+
+        let mut cur_count = 0usize;
+        while let Some(res) = iter.next().await {
+            match res {
+                Ok(()) => {
+                    cur_count += 1;
+                    f(cur_count, total_count);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(())
     }
 
     fn open_management_console_buckets(&self) -> Result<()> {

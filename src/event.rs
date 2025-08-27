@@ -55,6 +55,11 @@ pub enum AppEventType {
     OpenObjectVersionsTab,
     OpenPreview(ObjectKey, FileDetail, Option<String>),
     PreviewRerenderImage,
+    CopyObject(ObjectKey, ObjectItem),
+    StartPasteObject(ObjectKey),
+    OpenPasteConfirmDialog(PasteSpec),
+    PasteObject(PasteSpec),
+    CompletePasteObject(Result<CompletePasteObjectResult>),
     BucketListOpenManagementConsole,
     ObjectListOpenManagementConsole(ObjectKey),
     ObjectDetailOpenManagementConsole(ObjectKey),
@@ -71,6 +76,27 @@ pub enum AppEventType {
 pub struct CompleteInitializeResult {
     pub buckets: Vec<BucketItem>,
     pub prefix: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PasteSpec {
+    pub src_bucket: String,
+    pub src_key: String,
+    pub dst_bucket: String,
+    pub dst_key: String,
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct CompletePasteObjectResult {
+    pub name: String,
+}
+
+impl CompletePasteObjectResult {
+    pub fn new(result: Result<()>, name: String) -> Result<CompletePasteObjectResult> {
+        result?;
+        Ok(CompletePasteObjectResult { name })
+    }
 }
 
 impl CompleteInitializeResult {
