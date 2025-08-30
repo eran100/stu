@@ -888,6 +888,7 @@ impl<C: Client> App<C> {
         self.is_loading = true;
         let client = self.client.clone();
         let tx = self.tx.clone();
+        let max_concurrent_requests = self.ctx.config.max_concurrent_requests;
         // show loading UI during copy
         // (note: caller should set is_loading; keep logic here simple)
         tokio::spawn(async move {
@@ -899,6 +900,7 @@ impl<C: Client> App<C> {
                         &spec.src_key,
                         &spec.dst_bucket,
                         &spec.dst_key,
+                        max_concurrent_requests,
                         move |cur, total| {
                             let msg = format!("Copied {}/{} objects...", cur, total);
                             progress_tx.send(AppEventType::NotifyInfo(msg));

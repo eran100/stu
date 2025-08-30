@@ -53,6 +53,7 @@ pub trait Client: Send + Sync + 'static + Debug {
         src_prefix: &str,
         dst_bucket: &str,
         dst_prefix: &str,
+        max_concurrent_requests: usize,
         f: F,
     ) -> impl Future<Output = Result<()>> + Send;
     fn open_management_console_buckets(&self) -> Result<()>;
@@ -396,6 +397,7 @@ impl Client for AwsSdkClient {
         src_prefix: &str,
         dst_bucket: &str,
         dst_prefix: &str,
+        max_concurrent_requests: usize,
         f: F,
     ) -> Result<()> {
         // Normalize prefixes to end with '/'
@@ -415,8 +417,8 @@ impl Client for AwsSdkClient {
             .await?;
         let total_count = objs.len();
 
-        // Limit concurrent copy operations to a reasonable number.
-        let max_concurrent_requests: usize = 8;
+        // Concurrency comes from config; clamp to at least 1.
+        let concurrency: usize = max_concurrent_requests.max(1);
         let s3 = self.client.clone();
         let src_bucket = src_bucket.to_string();
         let dst_bucket = dst_bucket.to_string();
@@ -448,7 +450,7 @@ impl Client for AwsSdkClient {
                     .map_err(|e| AppError::new("Failed to copy object", e))
             }
         }))
-        .buffered(max_concurrent_requests);
+        .buffered(concurrency);
 
         let mut cur_count = 0usize;
         while let Some(res) = iter.next().await {
