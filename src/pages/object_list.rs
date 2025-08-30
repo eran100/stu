@@ -997,18 +997,122 @@ fn build_paste_confirm_message_lines<'a>(
     spec: &crate::event::PasteSpec,
     theme: &ColorTheme,
 ) -> Vec<Line<'a>> {
+    // ConfirmDialog sets width=70 and adds a 1-char horizontal padding inside a bordered block.
+    // Text content width = 70 (dialog) - 2 (borders) - 2 (padding) = 66.
+    const CONFIRM_DIALOG_TEXT_WIDTH: usize = 66;
+
     let from = format!("s3://{}/{}", spec.src_bucket, spec.src_key);
     let to = format!("s3://{}/{}", spec.dst_bucket, spec.dst_key);
-    vec![
-        Line::from("You are about to copy the following object:".fg(theme.fg)),
-        Line::from(""),
-        Line::from(from.fg(theme.fg).bold()),
-        Line::from(""),
-        Line::from("Destination:".fg(theme.fg)),
-        Line::from(to.fg(theme.fg).bold()),
-        Line::from(""),
-        Line::from("Do you want to proceed?".fg(theme.fg)),
-    ]
+
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    lines.push(Line::from(
+        "You are about to copy the following object:".fg(theme.fg),
+    ));
+    lines.push(Line::from(""));
+
+    for l in wrap_s3_path_for_dialog(&from, CONFIRM_DIALOG_TEXT_WIDTH) {
+        lines.push(Line::from(l.fg(theme.fg).bold()));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Destination:".fg(theme.fg)));
+
+    for l in wrap_s3_path_for_dialog(&to, CONFIRM_DIALOG_TEXT_WIDTH) {
+        lines.push(Line::from(l.fg(theme.fg).bold()));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Do you want to proceed?".fg(theme.fg)));
+
+    lines
+}
+
+fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
+    // Fast path when it already fits.
+    if s.chars().count() <= max_width {
+        return vec![s.to_string()];
+    }
+
+    let prefix = "s3://";
+    if s.starts_with(prefix) {
+        wrap_path_with_prefix(s, prefix, max_width)
+    } else {
+        wrap_strict_by_char_width(s, max_width)
+    }
+}
+
+fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    // Safety: `prefix` is ASCII here; slicing by byte length is fine.
+    let rest = &s[prefix.len()..];
+    let mut current = String::from(prefix);
+
+    // Join using '/' while trying to keep segments intact when possible.
+    for (i, segment) in rest.split('/').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+
+        let to_append = if i == 0 {
+            // directly after prefix: s3://bucket
+            segment.to_string()
+        } else {
+            format!("/{}", segment)
+        };
+
+        if current.chars().count() + to_append.chars().count() <= max_width {
+            current.push_str(&to_append);
+            continue;
+        }
+
+        // Flush current line if it has content.
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+
+        // Now place this segment (with leading slash) across as many lines as needed.
+        let seg_with_lead = if i == 0 {
+            segment.to_string()
+        } else {
+            format!("/{}", segment)
+        };
+        let mut chunks = wrap_strict_by_char_width(&seg_with_lead, max_width);
+        if let Some(first) = chunks.first() {
+            current = first.clone();
+        } else {
+            current.clear();
+        }
+        // Push remaining chunks as complete lines; keep last chunk in `current` to try and grow with next segments.
+        for c in chunks.drain(1..) {
+            lines.push(std::mem::take(&mut current));
+            current = c;
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+fn wrap_strict_by_char_width(s: &str, max_width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut count = 0usize;
+    for ch in s.chars() {
+        if count >= max_width {
+            lines.push(std::mem::take(&mut cur));
+            count = 0;
+        }
+        cur.push(ch);
+        count += 1; // Assumes ASCII-width; S3 paths are typically ASCII.
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 #[cfg(test)]
