@@ -1,0 +1,7 @@
+# AGENTS.md
+
+- Use the `set_cells!` drawing macro in [`src/macros.rs`](src/macros.rs:33) for dense buffer writes — it avoids repeated per-cell boilerplate and is used in `widget` tests (see macro and its test at [`src/macros.rs`](src/macros.rs:48-66)).
+- Keybinding overrides are merged per-section, not merged event-by-event. See merge behavior in [`src/keys.rs`](src/keys.rs:236-244); if you want to replace a default event, place it under the same section in the custom file (`$STU_ROOT_DIR/keybindings.toml`) rather than expecting cross-section merges.
+- The key parser lowercases and strips spaces before parsing modifiers (`ctrl-`, `alt-`, `shift-`) — see [`src/keys.rs`](src/keys.rs:255-269) and character-handling at [`src/keys.rs`](src/keys.rs:322-328). Beware Shift handling turning chars uppercase.
+- Prefer creating test fakes implementing the `Client` trait exactly as declared in [`src/client.rs`](src/client.rs:39-62) — methods return `impl Future` (no async-trait). Do not attempt to use async-trait shims in tests.
+- Avoid changing `handle_user_events!` control-flow semantics: it intentionally breaks on the first matched event (see [`src/macros.rs`](src/macros.rs:2-14)); handlers rely on that to prefer earlier mappings.

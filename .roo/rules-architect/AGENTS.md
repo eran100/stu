@@ -1,0 +1,7 @@
+# AGENTS.md
+
+- Async work MUST be expressed as StartX/CompleteX pairs: declare both variants in [`src/event.rs`](src/event.rs:18-73), spawn the task from `App` (examples at [`src/app.rs`](src/app.rs:89-100), [`src/app.rs`](src/app.rs:257-261)), and ensure the spawned task sends the Complete variant via the `Sender`.
+- CompleteX constructors unwrap underlying operation Results (see `CompleteLoadObjectsResult::new` in [`src/event.rs`](src/event.rs:133-146)); preserve that pattern so errors propagate to `App::error_notification` unchanged.
+- UI input is quiesced while `is_loading` is true; background tasks must either send notifications (NotifyInfo/Success/Warn/Error) or CompleteX to re-enable input (`src/run.rs`:34-37, `src/app.rs`:942-947).
+- Page stack semantics are strict: use `Page::of_*` factories and push/pop only via `page_stack` methods — external mutation of page internals breaks drawing/handlers (see usages in [`src/app.rs`](src/app.rs:108-116) and pop/replace at [`src/app.rs`](src/app.rs:296-299)).
+- Error logging is synchronous and fatal on failure: architecture expects crashes if saving error logs fails — do not attempt to swallow or background this behavior (`src/app.rs`:976-982).

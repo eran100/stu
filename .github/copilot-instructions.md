@@ -1,81 +1,42 @@
-## Agent Contract (Must Follow)
+# Copilot instructions for this repo
 
-- Follow the **StartX → async → CompleteX** event pattern.  
-  Always toggle `self.is_loading` and emit notifications.  
-- Touch only the **smallest set of files**. Prefer minimal diffs.  
-- Tests:
-  - **No network calls** — always mocks/fakes.
-  - Add/keep table tests with `rstest`.
-- CI gates must pass locally:
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo build`
-  - `cargo test`
-- Respect **MSRV** from `Cargo.toml`.  
-- Naming conventions:  
-  - Events: `StartX` / `CompleteX`  
-  - Modules/files: `snake_case`  
-  - Types/enums: `CamelCase`
-- UI rules:
-  - Help hides header.  
-  - Footer shows latest notification unless Help is visible.  
-  - Show `LoadingDialog` when loading.  
-- Config & keybindings:
-  - Always resolve via `Config` APIs.  
-  - **Never hardcode paths**.
+Purpose: STU is a terminal UI for browsing S3 (and compatible endpoints) built with Ratatui. Focus changes around the event-driven UI loop, page stack, and the S3 client abstraction.
 
-## Copilot instructions for this repo
+Architecture quick map
+- Entry and loop: `src/main.rs` parses flags, builds `Config`, `Environment`, key mapper, and S3 `Client`; sets up event channel from `src/event.rs`; then `src/run.rs` renders and drives the main loop.
+- Events: `AppEventType` in `src/event.rs` is the backbone. Long ops follow Start/Do/Complete patterns (e.g., `StartDownloadObject` → `DownloadObject` → `CompleteDownloadObject`). Use the provided `Complete*Result::new(...)` helpers to propagate errors early.
+- State: `App<C: Client>` in `src/app.rs` holds the page stack, key mapper, `AppObjects` caches, `notification`, and `is_loading`. Async work is spawned inside `App` methods; results are sent back via `Sender`.
+- Pages: `src/pages/page.rs` defines `Page` enum and `PageStack`; concrete page types live under `src/pages/**`. Use `Page::of_*` constructors and push/pop onto the stack; footer shows `short_helps`, header hides on Help page.
+- Input mapping: `src/keys.rs` builds a `UserEventMapper` from `assets/keybindings.toml` merged with `$STU_ROOT_DIR/keybindings.toml`. Map crossterm `KeyEvent` → `UserEvent` per section (bucket_list, object_list, etc.).
+- S3: `src/client.rs` defines the `Client` trait and the AWS SDK implementation (addressing style, pagination, copy, downloads). UI never calls AWS directly—always via `Client`.
 
-This is a Rust TUI app for browsing S3. Agents should follow the project’s event-driven architecture and CI rules to keep changes easy to review and ship.
+Developer workflows
+- Build/run: `cargo build`; `cargo run -- --debug [-r us-east-1] [--bucket B --prefix P]`. Debug logs write to `~/.stu/debug.log` when `--debug` is set; errors always to `~/.stu/error.log`.
+- Lint/format/tests: `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`. MSRV is 1.87.0.
+- Config: `src/config.rs`; file is `$STU_ROOT_DIR/config.toml` (defaults to `~/.stu`). Env expansion is strict: undefined envs error, except `$STU_ROOT_DIR` which resolves to the app dir.
+- Image/docs tooling in `tool/` and `Makefile` is optional (used for screenshots only) and requires building with `--features imggen`.
 
-### Big picture
-- Core loop: `src/run.rs` draws the UI and processes `AppEventType` from an async mpsc channel (see `src/event.rs`).
-- State and actions live in `App<C: Client>` (`src/app.rs`). UI pages are a stack of `Page` enum variants (`src/pages/**`) rendered with ratatui widgets (`src/widget/**`).
-- Input: crossterm key events → `UserEventMapper` (`src/keys.rs`) → current page handler.
-- I/O: AWS S3 operations via the `Client` trait (`src/client.rs`), with an `AwsSdkClient` implementation. Long-running ops are spawned and report back via “Complete*” events.
+Adding a new user action (end-to-end)
+1) Declare a `UserEvent` in `src/keys.rs` and bind it in `assets/keybindings.toml` (or instruct users to override). Ensure it’s included in the correct section; then wire it in `build_user_event_mapper`.
+2) Handle it where appropriate: either in `run.rs` pre-handling (for global `Quit`/`DumpApp`) or in the current page via `Page::handle_user_events` → `page.handle_key(...)`.
+3) If async work is needed, add `AppEventType::{StartX, X, CompleteX}` (or reuse existing), extend the `match` in `src/run.rs`, and implement `App::{start_x, x, complete_x}` in `src/app.rs`.
+4) In long ops, set/reset `is_loading`, send progress via `NotifyInfo`, and on success/failure send `NotifySuccess/NotifyError`. Errors are logged via `Config::error_log_path()`.
+5) Update page `helps()`/`short_helps()` to surface the new action and key.
 
-### Build, test, run
-- Minimum supported Rust: from `Cargo.toml` `rust-version` (1.87.0). CI builds on MSRV and stable.
-- Before pushing, ensure all pass:
-  - Format: `cargo fmt --all -- --check`
-  - Lint: `cargo clippy --all-targets --all-features -- -D warnings`
-  - Build: `cargo build`
-  - Test: `cargo test`
-- Run locally (examples):
-  - `cargo run -- --debug` writes logs to `~/.stu/debug.log`
-  - `cargo run -- --bucket my-bucket --prefix logs/`
-  - Use env vars like `AWS_PROFILE`, `AWS_REGION`, and optional `--endpoint-url`.
+Patterns and gotchas
+- Event naming: prefer `StartX` (UI initiates) → `X` (actual async) → `CompleteX(Result<T>)` (UI apply and clear `is_loading`). Reuse result wrappers like `CompleteDownloadObjectResult::new` to bubble errors.
+- Caching: object lists/details/versions are cached in `AppObjects`; check cache before enqueuing load events to avoid redundant calls.
+- Large transfers: progress notifications are rate-limited in `download_object` and only enabled for files ≥ 10 MB (`handle_loading_size`).
+- Concurrency: multi-object operations (download/copy) use `buffered(max_concurrent_requests)`; configurable via `Config.max_concurrent_requests`.
+- External open: Management Console URLs are opened via `open` crate methods on the `Client` (`open_management_console_*`).
 
-### Project conventions
-- Errors: wrap with `AppError` (`src/error.rs`). UI notifications are set via `App::info/success/warn/error_notification`. Errors are logged to `~/.stu/error.log`.
-- Async tasks: In `App` methods, spawn AWS calls and send a matching `Complete*` event. Always manage `self.is_loading` and clear/emit notifications accordingly.
-- User input: Map in `assets/keybindings.toml`, optionally overridden by `~/.stu/keybindings.toml` (path via `Config::keybindings_file_path()`). Use `UserEventMapper` APIs to display keys in help/status.
-- Config: Load from `$STU_ROOT_DIR/config.toml` or `~/.stu/config.toml` (`src/config.rs`). Includes `download_dir`, `default_region`, and `max_concurrent_requests` for bulk copy/download.
-- UI: Hide header on Help page. Footer shows either help or the latest notification. Use `LoadingDialog` overlay when `is_loading` is true.
+Testing
+- Avoid network I/O. Implement a `FakeClient: Client` returning canned data and inject it into `App::new(...)`. Use `rstest` for tables.
+- Sandboxing: run tests with `STU_ROOT_DIR=$(mktemp -d)` to isolate config/log writes.
 
-### Adding a new feature (pattern)
-1) Input: add a `UserEvent` if needed (`src/keys.rs`) and bind it in `assets/keybindings.toml`.
-2) Intent → event: have the page send an `AppEventType::{Start..., ...}` via `tx` (see page implementations), or handle in `run.rs` if it’s global.
-3) Side effect: implement an `App` method that spawns the work (e.g., call `client.*`) and then sends a `Complete*` event; set/reset `is_loading`.
-4) Result: handle `AppEventType::Complete*` in `App` to mutate state (push/pop `Page`, update caches in `AppObjects`), and emit notifications.
-5) Render: update the appropriate page/widget to reflect new state; keep diffs minimal.
+Useful file pointers
+- CLI/entry: `src/main.rs`; Loop: `src/run.rs`; Events/channels: `src/event.rs`.
+- App/state/UI orchestration: `src/app.rs`; Pages and stack: `src/pages/page.rs` and `src/pages/**`.
+- Key mapping: `src/keys.rs`; Config: `src/config.rs`; Client/S3: `src/client.rs`.
 
-Example events already follow this flow:
-- Load objects: `LoadObjects` → `complete_load_objects`
-- Preview/download: `PreviewObject`/`DownloadObject` → `complete_preview_object`/`complete_download_object`
-- Versions, copy/paste: `LoadObjectVersions`/`PasteObject` → respective `complete_*` handlers
-
-### Integration details
-- S3 addressing style: CLI `--path-style` maps to `client::AddressingStyle` (Auto/Always/Never). Endpoint URL support for S3-compatible storage.
-- Progress: large downloads (> ~10MB) emit periodic `NotifyInfo` messages with humanized sizes.
-- Management Console: open URLs via `Client::open_management_console_*` helpers.
-
-### Where to look
-- Entrypoint and CLI: `src/main.rs`
-- Event bus: `src/event.rs`
-- App state/logic: `src/app.rs`
-- Client and AWS calls: `src/client.rs`
-- Pages: `src/pages/**`, Widgets: `src/widget/**`
-- Config and keybindings: `src/config.rs`, `src/keys.rs`, `assets/keybindings.toml`
-
-Keep changes aligned with the above patterns. If you introduce new events or pages, mirror the existing naming (`StartX`, `CompleteX`) and wiring.
+References: README has usage and links to full docs; `AGENTS.md` mirrors these conventions for contributors.
