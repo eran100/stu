@@ -1235,7 +1235,11 @@ mod tests {
         assert!(lines[0].starts_with("s3://"));
         // No line should exceed max display width
         for line in &lines {
-            assert!(unicode_width::UnicodeWidthStr::width(line.as_str()) <= 12, "line too wide: {}", line);
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line.as_str()) <= 12,
+                "line too wide: {}",
+                line
+            );
         }
         // Concatenation should reconstruct the path for this case
         assert_eq!(lines.join(""), s);
