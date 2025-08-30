@@ -11,6 +11,7 @@ use aws_sdk_s3::{
     operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output},
 };
 use chrono::TimeZone;
+use futures::StreamExt;
 
 use crate::{
     error::{AppError, Result},
@@ -45,6 +46,16 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn load_object_versions(&self, bucket: &str, key: &str) -> impl Future<Output = Result<Vec<FileVersion>>> + Send;
     fn download_object<W: std::io::Write + Send, F: Fn(usize) + Send>(&self, bucket: &str, key: &str, version_id: Option<String>, writer: &mut BufWriter<W>, f: F) -> impl Future<Output = Result<()>> + Send;
     fn list_all_download_objects(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<Vec<DownloadObjectInfo>>> + Send;
+    fn copy_object(&self, src_bucket: &str, src_key: &str, dst_bucket: &str, dst_key: &str) -> impl Future<Output = Result<()>> + Send;
+    fn copy_prefix<F: Fn(usize, usize) + Send>(
+        &self,
+        src_bucket: &str,
+        src_prefix: &str,
+        dst_bucket: &str,
+        dst_prefix: &str,
+        max_concurrent_requests: usize,
+        f: F,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
@@ -356,6 +367,100 @@ impl Client for AwsSdkClient {
         Ok(objs)
     }
 
+    async fn copy_object(
+        &self,
+        src_bucket: &str,
+        src_key: &str,
+        dst_bucket: &str,
+        dst_key: &str,
+    ) -> Result<()> {
+        // S3 CopyObject requires a CopySource of the form "{bucket}/{key}".
+        // The SDK accepts a String and handles necessary header wiring.
+        let copy_source = format!("{}/{}", src_bucket, src_key);
+        let result = self
+            .client
+            .copy_object()
+            .bucket(dst_bucket)
+            .key(dst_key)
+            .copy_source(copy_source)
+            .send()
+            .await;
+
+        result
+            .map(|_| ())
+            .map_err(|e| AppError::new("Failed to copy object", e))
+    }
+
+    async fn copy_prefix<F: Fn(usize, usize) + Send>(
+        &self,
+        src_bucket: &str,
+        src_prefix: &str,
+        dst_bucket: &str,
+        dst_prefix: &str,
+        max_concurrent_requests: usize,
+        f: F,
+    ) -> Result<()> {
+        // Normalize prefixes to end with '/'
+        let src_prefix = normalize_prefix(src_prefix);
+        let dst_prefix = normalize_prefix(dst_prefix);
+
+        let objs = self
+            .list_all_download_objects(src_bucket, &src_prefix)
+            .await?;
+        let total_count = objs.len();
+
+        // Concurrency comes from config; clamp to at least 1.
+        let concurrency: usize = max_concurrent_requests.max(1);
+        let s3 = self.client.clone();
+        // Wrap repeatedly reused strings in Arc to avoid per-item cloning allocations
+        let src_bucket = std::sync::Arc::new(src_bucket.to_string());
+        let dst_bucket = std::sync::Arc::new(dst_bucket.to_string());
+        let src_prefix = std::sync::Arc::new(src_prefix);
+        let dst_prefix = std::sync::Arc::new(dst_prefix);
+
+        let mut iter = futures::stream::iter(objs.into_iter().map(|obj| {
+            let s3 = s3.clone();
+            let src_bucket = std::sync::Arc::clone(&src_bucket);
+            let dst_bucket = std::sync::Arc::clone(&dst_bucket);
+            let src_prefix = std::sync::Arc::clone(&src_prefix);
+            let dst_prefix = std::sync::Arc::clone(&dst_prefix);
+            async move {
+                // Compute destination key preserving the suffix relative to src_prefix
+                let (_, dst_key) = compute_dst_key(&src_prefix, &dst_prefix, &obj.key);
+                let copy_source = format!("{}/{}", &**src_bucket, obj.key);
+                let result = s3
+                    .copy_object()
+                    .bucket(&**dst_bucket)
+                    .key(&dst_key)
+                    .copy_source(copy_source)
+                    .send()
+                    .await;
+                result
+                    .map(|_| ())
+                    .map_err(|e| AppError::new("Failed to copy object", e))
+            }
+        }))
+        .buffered(concurrency);
+
+        let mut cur_count = 0usize;
+        // Throttle progress callbacks to avoid overwhelming the UI.
+        // Aim for at most ~50 updates; always notify on the last item.
+        let notify_every: usize = (total_count / 50).max(1);
+        while let Some(res) = iter.next().await {
+            match res {
+                Ok(()) => {
+                    cur_count += 1;
+                    if cur_count % notify_every == 0 || cur_count == total_count {
+                        f(cur_count, total_count);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(())
+    }
+
     fn open_management_console_buckets(&self) -> Result<()> {
         let path = format!(
             "https://s3.console.aws.amazon.com/s3/buckets?region={}",
@@ -408,6 +513,29 @@ fn objects_output_to_dirs(
         .filter(|f| !f.name().is_empty()) // skip dummy empty object
         .collect()
 }
+
+/// Compute the destination key for copy_prefix by preserving the suffix relative to `src_prefix`
+/// and concatenating it to `dst_prefix`.
+/// Returns `(suffix, dst_key)`.
+fn compute_dst_key(src_prefix: &str, dst_prefix: &str, obj_key: &str) -> (String, String) {
+    let suffix = obj_key
+        .strip_prefix(src_prefix)
+        .expect("object key should have the source prefix")
+        .to_string();
+    let dst_key = format!("{}{}", dst_prefix, suffix);
+    (suffix, dst_key)
+}
+
+/// Normalize a prefix to always end with '/'
+fn normalize_prefix(prefix: &str) -> String {
+    let mut s = prefix.to_string();
+    if !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
+// tests are defined at the end of file to avoid clippy items-after-test-module
 
 fn objects_output_to_files(
     region: &str,
@@ -482,4 +610,37 @@ fn build_object_arn(bucket: &str, key: &str) -> String {
 
 fn build_object_url(region: &str, bucket: &str, key: &str) -> String {
     format!("https://{bucket}.s3.{region}.amazonaws.com/{key}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_dst_key;
+
+    #[test]
+    fn test_compute_dst_key_preserves_suffix() {
+        let (suffix, dst) = compute_dst_key("src/", "dst/", "src/a/b.txt");
+        assert_eq!(suffix, "a/b.txt");
+        assert_eq!(dst, "dst/a/b.txt");
+    }
+
+    #[test]
+    #[should_panic(expected = "object key should have the source prefix")]
+    fn test_compute_dst_key_when_no_prefix_match() {
+        let _ = compute_dst_key("src/", "dst/", "other/x");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_prefix;
+
+    #[test]
+    fn test_normalize_prefix_adds_slash() {
+        assert_eq!(normalize_prefix("abc"), "abc/");
+    }
+
+    #[test]
+    fn test_normalize_prefix_keeps_slash() {
+        assert_eq!(normalize_prefix("abc/"), "abc/");
+    }
 }

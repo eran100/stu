@@ -85,6 +85,9 @@ pub async fn run<B: Backend, C: Client>(
             AppEventType::LoadObjects(object_key) => {
                 app.load_objects(object_key);
             }
+            AppEventType::GoToPath(object_key) => {
+                app.go_to_path(object_key);
+            }
             AppEventType::CompleteLoadObjects(result) => {
                 app.complete_load_objects(result);
             }
@@ -165,6 +168,21 @@ pub async fn run<B: Backend, C: Client>(
             }
             AppEventType::ObjectListRefresh => {
                 app.object_list_refresh();
+            }
+            AppEventType::CopyObject(object_key, object_item) => {
+                app.copy_object(object_key, object_item);
+            }
+            AppEventType::StartPasteObject(dest_dir_key) => {
+                app.start_paste_object(dest_dir_key);
+            }
+            AppEventType::OpenPasteConfirmDialog(spec) => {
+                app.open_paste_confirm_dialog(spec);
+            }
+            AppEventType::PasteObject(spec) => {
+                app.paste_object(spec);
+            }
+            AppEventType::CompletePasteObject(result) => {
+                app.complete_paste_object(result);
             }
             AppEventType::BackToBucketList => {
                 app.back_to_bucket_list();

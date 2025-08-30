@@ -54,9 +54,11 @@ enum ViewState {
     Default,
     FilterDialog,
     SortDialog,
+    GoToPathDialog(InputDialogState),
     CopyDetailDialog(Box<CopyDetailDialogState>),
     DownloadConfirmDialog(Vec<DownloadObjectInfo>, ConfirmDialogState, bool),
     SaveDialog(InputDialogState, Option<Vec<DownloadObjectInfo>>),
+    PasteConfirmDialog(crate::event::PasteSpec, ConfirmDialogState),
 }
 
 impl ObjectListPage {
@@ -124,6 +126,18 @@ impl ObjectListPage {
                     UserEvent::ObjectListSort => {
                         self.open_sort_dialog();
                     }
+                    UserEvent::ObjectListGoToPath => {
+                        self.open_go_to_path_dialog();
+                    }
+                    UserEvent::ObjectListCopyObject if self.non_empty() => {
+                        let object_key = self.current_selected_object_key();
+                        let object_item = self.current_selected_item().to_owned();
+                        self.tx.send(AppEventType::CopyObject(object_key, object_item));
+                    }
+                    UserEvent::ObjectListPasteObject => {
+                        let dest_dir = self.current_dir_object_key().clone();
+                        self.tx.send(AppEventType::StartPasteObject(dest_dir));
+                    }
                     UserEvent::ObjectListCopyDetails if self.non_empty() => {
                         self.open_copy_detail_dialog();
                     }
@@ -138,6 +152,31 @@ impl ObjectListPage {
                     }
                     UserEvent::ObjectListResetFilter => {
                         self.reset_filter();
+                    }
+                }
+            }
+            ViewState::GoToPathDialog(ref mut state) => {
+                handle_user_events_with_default! { user_events =>
+                    UserEvent::InputDialogClose => {
+                        self.view_state = ViewState::Default;
+                    }
+                    UserEvent::InputDialogApply => {
+                        let mut input = state.input().trim().to_string();
+                        if !input.is_empty() && !input.ends_with('/') {
+                            input.push('/');
+                        }
+                        let object_key = ObjectKey::with_prefix(
+                            self.object_key.bucket_name.clone(),
+                            input,
+                        );
+                        self.tx.send(AppEventType::GoToPath(object_key));
+                        self.view_state = ViewState::Default;
+                    }
+                    UserEvent::Help => {
+                        self.tx.send(AppEventType::OpenHelp);
+                    }
+                    => {
+                        state.handle_key_event(key_event);
                     }
                 }
             }
@@ -171,6 +210,22 @@ impl ObjectListPage {
                     }
                     UserEvent::SelectDialogSelect => {
                         self.apply_sort();
+                    }
+                    UserEvent::Help => {
+                        self.tx.send(AppEventType::OpenHelp);
+                    }
+                }
+            }
+            ViewState::PasteConfirmDialog(_, ref mut _state) => {
+                handle_user_events! { user_events =>
+                    UserEvent::SelectDialogClose => {
+                        self.close_paste_confirm_dialog();
+                    }
+                    UserEvent::SelectDialogLeft | UserEvent::SelectDialogRight => {
+                        _state.toggle();
+                    }
+                    UserEvent::SelectDialogSelect => {
+                        self.paste();
                     }
                     UserEvent::Help => {
                         self.tx.send(AppEventType::OpenHelp);
@@ -262,6 +317,17 @@ impl ObjectListPage {
             f.set_cursor_position((cursor_x, cursor_y));
         }
 
+        if let ViewState::GoToPathDialog(state) = &mut self.view_state {
+            let dialog = InputDialog::default()
+                .title("Go To Path")
+                .max_width(50)
+                .theme(&self.ctx.theme);
+            f.render_stateful_widget(dialog, area, state);
+
+            let (cursor_x, cursor_y) = state.cursor();
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+
         if let ViewState::SortDialog = self.view_state {
             let sort_dialog =
                 ObjectListSortDialog::new(self.sort_dialog_state).theme(&self.ctx.theme);
@@ -277,6 +343,12 @@ impl ObjectListPage {
             let message_lines = build_download_confirm_message_lines(objs, &self.ctx.theme);
             let download_confirm_dialog = ConfirmDialog::new(message_lines).theme(&self.ctx.theme);
             f.render_stateful_widget(download_confirm_dialog, area, state);
+        }
+
+        if let ViewState::PasteConfirmDialog(spec, state) = &mut self.view_state {
+            let lines = build_paste_confirm_message_lines(spec, &self.ctx.theme);
+            let confirm_dialog = ConfirmDialog::new(lines).theme(&self.ctx.theme);
+            f.render_stateful_widget(confirm_dialog, area, state);
         }
 
         if let ViewState::SaveDialog(state, _) = &mut self.view_state {
@@ -308,9 +380,12 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListBack, "Go back to prev folder"),
                         BuildHelpsItem::new(UserEvent::ObjectListBucketList, "Go back to bucket list"),
                         BuildHelpsItem::new(UserEvent::ObjectListFilter, "Filter object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListGoToPath, "Go to path"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListCopyObject, "Copy selection"),
+                        BuildHelpsItem::new(UserEvent::ObjectListPasteObject, "Paste to current dir"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyDetails, "Open copy dialog"),
                         BuildHelpsItem::new(UserEvent::ObjectListRefresh, "Refresh object list"),
                         BuildHelpsItem::new(UserEvent::ObjectListManagementConsole, "Open management console in browser"),
@@ -329,14 +404,24 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListBack, "Go back to prev folder"),
                         BuildHelpsItem::new(UserEvent::ObjectListBucketList, "Go back to bucket list"),
                         BuildHelpsItem::new(UserEvent::ObjectListFilter, "Filter object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListGoToPath, "Go to path"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListCopyObject, "Copy selection"),
+                        BuildHelpsItem::new(UserEvent::ObjectListPasteObject, "Paste to current dir"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyDetails, "Open copy dialog"),
                         BuildHelpsItem::new(UserEvent::ObjectListRefresh, "Refresh object list"),
                         BuildHelpsItem::new(UserEvent::ObjectListManagementConsole, "Open management console in browser"),
                     ]
                 }
+            },
+            ViewState::GoToPathDialog(_) => {
+                vec![
+                    BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
+                    BuildHelpsItem::new(UserEvent::InputDialogClose, "Close go to path"),
+                    BuildHelpsItem::new(UserEvent::InputDialogApply, "Go to path"),
+                ]
             },
             ViewState::FilterDialog => {
                 vec![
@@ -372,6 +457,15 @@ impl ObjectListPage {
                     BuildHelpsItem::new(UserEvent::SelectDialogSelect, "Confirm"),
                 ]
             }
+            ViewState::PasteConfirmDialog(_, _) => {
+                vec![
+                    BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogClose, "Close confirm dialog"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogRight, "Select next"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogLeft, "Select previous"),
+                    BuildHelpsItem::new(UserEvent::SelectDialogSelect, "Confirm"),
+                ]
+            }
             ViewState::SaveDialog(_, _) => {
                 vec![
                     BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
@@ -397,7 +491,9 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
                 } else {
@@ -410,11 +506,20 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
                 }
             },
+            ViewState::GoToPathDialog(_) => {
+                vec![
+                    BuildShortHelpsItem::single(UserEvent::InputDialogClose, "Close", 2),
+                    BuildShortHelpsItem::single(UserEvent::InputDialogApply, "Go", 1),
+                    BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
+                ]
+            }
             ViewState::FilterDialog => {
                 vec![
                     BuildShortHelpsItem::single(UserEvent::InputDialogClose, "Close", 2),
@@ -439,6 +544,14 @@ impl ObjectListPage {
                 ]
             },
             ViewState::DownloadConfirmDialog(_, _, _) => {
+                vec![
+                    BuildShortHelpsItem::single(UserEvent::SelectDialogClose, "Close", 2),
+                    BuildShortHelpsItem::group(vec![UserEvent::SelectDialogLeft, UserEvent::SelectDialogRight], "Select", 3),
+                    BuildShortHelpsItem::single(UserEvent::SelectDialogSelect, "Confirm", 1),
+                    BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
+                ]
+            },
+            ViewState::PasteConfirmDialog(_, _) => {
                 vec![
                     BuildShortHelpsItem::single(UserEvent::SelectDialogClose, "Close", 2),
                     BuildShortHelpsItem::group(vec![UserEvent::SelectDialogLeft, UserEvent::SelectDialogRight], "Select", 3),
@@ -501,6 +614,11 @@ impl ObjectListPage {
         self.sort_dialog_state.reset();
 
         self.sort_view_indices();
+    }
+
+    fn open_go_to_path_dialog(&mut self) {
+        let prefix = self.current_dir_object_key().joined_object_path(false);
+        self.view_state = ViewState::GoToPathDialog(InputDialogState::new(prefix));
     }
 
     fn open_copy_detail_dialog(&mut self) {
@@ -609,6 +727,15 @@ impl ObjectListPage {
         self.view_state = ViewState::Default;
     }
 
+    pub fn open_paste_confirm_dialog(&mut self, spec: crate::event::PasteSpec) {
+        let dialog_state = ConfirmDialogState::default();
+        self.view_state = ViewState::PasteConfirmDialog(spec, dialog_state);
+    }
+
+    fn close_paste_confirm_dialog(&mut self) {
+        self.view_state = ViewState::Default;
+    }
+
     fn start_download(&self) {
         match self.current_selected_item() {
             ObjectItem::Dir { .. } => {
@@ -705,6 +832,16 @@ impl ObjectListPage {
         let object_key = self.current_dir_object_key().clone();
         self.tx
             .send(AppEventType::ObjectListOpenManagementConsole(object_key));
+    }
+
+    fn paste(&mut self) {
+        if let ViewState::PasteConfirmDialog(spec, state) = &mut self.view_state {
+            if state.is_ok() {
+                let spec = spec.clone();
+                self.tx.send(AppEventType::PasteObject(spec));
+            }
+            self.close_paste_confirm_dialog();
+        }
     }
 
     pub fn current_selected_item(&self) -> &ObjectItem {
@@ -917,6 +1054,189 @@ fn build_download_confirm_message_lines<'a>(
     ]
 }
 
+fn build_paste_confirm_message_lines<'a>(
+    spec: &crate::event::PasteSpec,
+    theme: &ColorTheme,
+) -> Vec<Line<'a>> {
+    // ConfirmDialog sets width=70 and adds a 1-char horizontal padding inside a bordered block.
+    // Text content width = 70 (dialog) - 2 (borders) - 2 (padding) = 66.
+    const CONFIRM_DIALOG_TEXT_WIDTH: usize = 66;
+
+    let from = format!("s3://{}/{}", spec.src_bucket, spec.src_key);
+    let to = format!("s3://{}/{}", spec.dst_bucket, spec.dst_key);
+
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    lines.push(Line::from(
+        "You are about to copy the following object:".fg(theme.fg),
+    ));
+    lines.push(Line::from(""));
+
+    for l in wrap_s3_path_for_dialog(&from, CONFIRM_DIALOG_TEXT_WIDTH) {
+        lines.push(Line::from(l.fg(theme.fg).bold()));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Destination:".fg(theme.fg)));
+
+    for l in wrap_s3_path_for_dialog(&to, CONFIRM_DIALOG_TEXT_WIDTH) {
+        lines.push(Line::from(l.fg(theme.fg).bold()));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from("Do you want to proceed?".fg(theme.fg)));
+
+    lines
+}
+
+fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
+    // Fast path when it already fits (Unicode display width).
+    if unicode_width::UnicodeWidthStr::width(s) <= max_width {
+        return vec![s.to_string()];
+    }
+
+    let prefix = "s3://";
+    if s.starts_with(prefix) {
+        wrap_path_with_prefix(s, prefix, max_width)
+    } else {
+        wrap_strict_by_char_width(s, max_width)
+    }
+}
+
+/// Wrap an S3 path that begins with a known ASCII prefix (e.g. "s3://") so that:
+/// - The first line starts with the prefix and adds as many subsequent segments as fit.
+/// - Subsequent lines continue with remaining segments, splitting overly long segments as needed.
+/// - Empty segments are skipped.
+///   This keeps segments as intact as possible to improve readability, while ensuring each
+///   resulting line does not exceed `max_width` display columns.
+fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String> {
+    // Helper to wrap `text_to_wrap` and append resulting chunks into `lines`,
+    // leaving the last chunk in `current` so subsequent segments can be appended.
+    fn append_wrapped_chunks(
+        lines: &mut Vec<String>,
+        current: &mut String,
+        text_to_wrap: &str,
+        max_width: usize,
+    ) {
+        let mut chunks = wrap_strict_by_char_width(text_to_wrap, max_width);
+        if chunks.is_empty() {
+            current.clear();
+            return;
+        }
+        let last_chunk = chunks.pop().unwrap();
+        lines.extend(chunks);
+        *current = last_chunk;
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+
+    // Safety: `prefix` is ASCII here; slicing by byte length is fine.
+    let rest = &s[prefix.len()..];
+    let mut current = String::from(prefix);
+
+    // Join using '/' while trying to keep segments intact when possible.
+    for (i, segment) in rest.split('/').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+
+        let to_append = if i == 0 {
+            // directly after prefix: s3://bucket
+            segment.to_string()
+        } else {
+            format!("/{}", segment)
+        };
+
+        if unicode_width::UnicodeWidthStr::width(current.as_str())
+            + unicode_width::UnicodeWidthStr::width(to_append.as_str())
+            <= max_width
+        {
+            current.push_str(&to_append);
+            continue;
+        }
+
+        // If the first segment is too long to fit after the prefix, try to fill the first line
+        // by appending as much of the segment as fits, instead of flushing the prefix alone.
+        if i == 0 && current == prefix {
+            let cur_w = unicode_width::UnicodeWidthStr::width(current.as_str());
+            let remain = max_width.saturating_sub(cur_w);
+            if remain == 0 {
+                // No space left; flush prefix as its own line and wrap the segment.
+                lines.push(std::mem::take(&mut current));
+                append_wrapped_chunks(&mut lines, &mut current, segment, max_width);
+            } else {
+                // Split the first segment so that the first chunk fits on the current line
+                let (head, tail) = split_by_display_width(segment, remain);
+                current.push_str(&head);
+                lines.push(std::mem::take(&mut current));
+
+                // Wrap the remaining part of the segment across subsequent lines
+                if !tail.is_empty() {
+                    append_wrapped_chunks(&mut lines, &mut current, &tail, max_width);
+                }
+            }
+        } else {
+            // General case: flush current and wrap this segment (including its leading slash when i > 0)
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            append_wrapped_chunks(&mut lines, &mut current, &to_append, max_width);
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+/// Strictly wrap by display width (taking Unicode width into account).
+/// Splits exactly at the column limit without hyphenation.
+fn wrap_strict_by_char_width(s: &str, max_width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut count = 0usize;
+    for ch in s.chars() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if count + char_width > max_width {
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+            }
+            count = 0;
+        }
+        cur.push(ch);
+        count += char_width;
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+// Split a string into a pair of (prefix, suffix) where the prefix's display width
+// does not exceed `max_width`. Uses Unicode width for accurate terminal width handling.
+fn split_by_display_width(s: &str, max_width: usize) -> (String, String) {
+    use unicode_width::UnicodeWidthChar;
+    if max_width == 0 {
+        return (String::new(), s.to_string());
+    }
+    let mut cur_w = 0usize;
+    let mut prefix = String::new();
+    let mut iter = s.chars().peekable();
+    while let Some(&ch) = iter.peek() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cur_w + w > max_width {
+            break;
+        }
+        prefix.push(ch);
+        cur_w += w;
+        iter.next();
+    }
+    let suffix: String = iter.collect();
+    (prefix, suffix)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::set_cells;
@@ -930,6 +1250,99 @@ mod tests {
         style::{Color, Modifier},
         Terminal,
     };
+
+    #[test]
+    fn test_wrap_strict_by_char_width_ascii() {
+        let lines = wrap_strict_by_char_width("abcdef", 3);
+        assert_eq!(lines, vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn test_wrap_strict_by_char_width_wide() {
+        // '界' has width 2; 'A' width 1
+        let s = "A世界A"; // widths: 1,2,2,1
+        let lines = wrap_strict_by_char_width(s, 3);
+        // Expect split like: "A世" (1+2=3), then "界A" (2+1=3)
+        assert_eq!(lines, vec!["A世", "界A"]);
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_basic() {
+        let s = "s3://bucket/longsegment/short";
+        let lines = wrap_path_with_prefix(s, "s3://", 12);
+        // First line should start with prefix and include as much as possible
+        assert!(lines[0].starts_with("s3://"));
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_long_single_segment() {
+        let long_seg = "A".repeat(50);
+        let s = format!("s3://bucket/{}", long_seg);
+        let lines = wrap_path_with_prefix(&s, "s3://", 12);
+        assert!(lines.len() >= 2);
+        assert!(lines[0].starts_with("s3://"));
+        // No line should exceed max display width
+        for line in &lines {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(line.as_str()) <= 12,
+                "line too wide: {}",
+                line
+            );
+        }
+        // Concatenation should reconstruct the path for this case
+        assert_eq!(lines.join(""), s);
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_consecutive_slashes() {
+        let s = "s3://bucket///dir//file";
+        let lines = wrap_path_with_prefix(s, "s3://", 20);
+        assert!(!lines.is_empty());
+        // After the initial prefix, there should be no duplicate slashes
+        for (i, line) in lines.iter().enumerate() {
+            let check = if i == 0 {
+                line.trim_start_matches("s3://")
+            } else {
+                line.as_str()
+            };
+            assert!(
+                !check.contains("//"),
+                "found duplicate slashes in line: {}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_long_first_segment_fill_first_line() {
+        let s = "s3://this-is-a-very-long-bucket-name/file.txt";
+        let max = 12usize;
+        let lines = wrap_path_with_prefix(s, "s3://", max);
+        assert!(!lines.is_empty());
+        // Ensure first line is not just the prefix when there is remaining space
+        assert!(lines[0].starts_with("s3://"));
+        use unicode_width::UnicodeWidthStr;
+        let prefix_w = UnicodeWidthStr::width("s3://");
+        assert!(UnicodeWidthStr::width(lines[0].as_str()) > prefix_w);
+        // Reconstruct
+        assert_eq!(lines.join(""), s);
+    }
+
+    #[test]
+    fn test_wrap_s3_path_for_dialog_non_s3_fallback() {
+        use unicode_width::UnicodeWidthStr;
+        let s = "bucket/dir/世界"; // includes wide chars
+        let max = 5;
+        let lines = wrap_s3_path_for_dialog(s, max);
+        assert!(lines.len() >= 2);
+        // Ensure none exceeds max display width
+        for line in &lines {
+            assert!(UnicodeWidthStr::width(line.as_str()) <= max);
+        }
+        // Reconstruct original
+        assert_eq!(lines.join(""), s);
+    }
 
     #[tokio::test]
     async fn test_render_without_scroll() -> std::io::Result<()> {

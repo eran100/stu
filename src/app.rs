@@ -66,6 +66,8 @@ pub struct App<C: Client> {
 
     notification: Notification,
     is_loading: bool,
+
+    clipboard: Option<(ObjectKey, ObjectItem)>,
 }
 
 impl<C: Client> App<C> {
@@ -80,6 +82,7 @@ impl<C: Client> App<C> {
             tx,
             notification: Notification::None,
             is_loading: true,
+            clipboard: None,
         }
     }
 
@@ -235,6 +238,13 @@ impl<C: Client> App<C> {
         self.app_objects.clear_object_items_under(object_key);
 
         self.tx.send(AppEventType::ReloadObjects);
+        self.is_loading = true;
+    }
+
+    pub fn go_to_path(&mut self, object_key: ObjectKey) {
+        // Replace current view with the target path and load its objects
+        self.page_stack.clear();
+        self.tx.send(AppEventType::LoadObjects(object_key));
         self.is_loading = true;
     }
 
@@ -820,6 +830,114 @@ impl<C: Client> App<C> {
         }
     }
 
+    pub fn copy_object(&mut self, object_key: ObjectKey, object_item: ObjectItem) {
+        let name = object_item.name().to_string();
+        self.clipboard = Some((object_key, object_item));
+        let msg = format!("Copied '{name}' to clipboard");
+        self.success_notification(msg);
+    }
+
+    pub fn start_paste_object(&mut self, dest_dir_key: ObjectKey) {
+        let Some((src_key_base, item)) = &self.clipboard else {
+            self.warn_notification("Clipboard is empty".to_string());
+            return;
+        };
+
+        let (name, src_key, is_dir) = match item {
+            ObjectItem::Dir { name, key, .. } => (name.clone(), key.clone(), true),
+            ObjectItem::File { name, key, .. } => (name.clone(), key.clone(), false),
+        };
+
+        let src_bucket = src_key_base.bucket_name.clone();
+        let dst_bucket = dest_dir_key.bucket_name.clone();
+
+        let mut dst_key = dest_dir_key.joined_object_path(false);
+        dst_key.push_str(&name);
+        if is_dir && !dst_key.ends_with('/') {
+            dst_key.push('/');
+        }
+
+        let spec = crate::event::PasteSpec {
+            src_bucket,
+            src_key,
+            dst_bucket,
+            dst_key,
+            name,
+        };
+        self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
+    }
+
+    pub fn open_paste_confirm_dialog(&mut self, spec: crate::event::PasteSpec) {
+        match self.page_stack.current_page_mut() {
+            Page::ObjectList(page) => {
+                page.open_paste_confirm_dialog(spec);
+            }
+            page => {
+                tracing::error!(
+                    "Attempted to open paste confirm dialog from invalid page: {:?}",
+                    page
+                );
+                self.warn_notification("Cannot paste from this page.".to_string());
+            }
+        }
+    }
+
+    pub fn paste_object(&mut self, spec: crate::event::PasteSpec) {
+        self.is_loading = true;
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let max_concurrent_requests = self.ctx.config.max_concurrent_requests;
+        // show loading UI during copy
+        // (note: caller should set is_loading; keep logic here simple)
+        tokio::spawn(async move {
+            let result = if spec.src_key.ends_with('/') {
+                let progress_tx = tx.clone();
+                client
+                    .copy_prefix(
+                        &spec.src_bucket,
+                        &spec.src_key,
+                        &spec.dst_bucket,
+                        &spec.dst_key,
+                        max_concurrent_requests,
+                        move |cur, total| {
+                            let msg = format!("Copied {}/{} objects...", cur, total);
+                            progress_tx.send(AppEventType::NotifyInfo(msg));
+                        },
+                    )
+                    .await
+            } else {
+                client
+                    .copy_object(
+                        &spec.src_bucket,
+                        &spec.src_key,
+                        &spec.dst_bucket,
+                        &spec.dst_key,
+                    )
+                    .await
+            };
+            let result = crate::event::CompletePasteObjectResult::new(result, spec.name.clone());
+            tx.send(AppEventType::CompletePasteObject(result));
+        });
+    }
+
+    pub fn complete_paste_object(
+        &mut self,
+        result: Result<crate::event::CompletePasteObjectResult>,
+    ) {
+        match result {
+            Ok(crate::event::CompletePasteObjectResult { name }) => {
+                let msg = format!("Copied '{name}' successfully");
+                self.success_notification(msg);
+                // Refresh current object list; loading state will be managed by the reload flow.
+                self.tx.send(AppEventType::ObjectListRefresh);
+            }
+            Err(e) => {
+                self.tx.send(AppEventType::NotifyError(e));
+                self.is_loading = false;
+            }
+        }
+    }
+
     pub fn loading(&self) -> bool {
         self.is_loading
     }
@@ -923,6 +1041,187 @@ impl<C: Client> App<C> {
         if self.loading() {
             let dialog = LoadingDialog::default().theme(&self.ctx.theme);
             f.render_widget(dialog, f.area());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        event::Sender,
+        keys::UserEventMapper,
+        object::{BucketItem, FileDetail, FileVersion, ObjectItem},
+        pages::page::Page,
+    };
+    use chrono::{DateTime, Local};
+
+    #[derive(Debug)]
+    struct FakeClient;
+
+    #[allow(clippy::manual_async_fn)]
+    impl Client for FakeClient {
+        fn region(&self) -> &str {
+            "us-east-1"
+        }
+        fn load_all_buckets(
+            &self,
+        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_bucket(
+            &self,
+            _name: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_objects(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<ObjectItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_object_detail(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _name: &str,
+        ) -> impl std::future::Future<Output = Result<FileDetail>> + Send {
+            async { Err(AppError::msg("not used in this test: load_object_detail")) }
+        }
+        fn load_object_versions(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<FileVersion>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn download_object<W: std::io::Write + Send, F: Fn(usize) + Send>(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _version_id: Option<String>,
+            _writer: &mut std::io::BufWriter<W>,
+            _f: F,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn list_all_download_objects(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<DownloadObjectInfo>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn copy_object(
+            &self,
+            _src_bucket: &str,
+            _src_key: &str,
+            _dst_bucket: &str,
+            _dst_key: &str,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn copy_prefix<F: Fn(usize, usize) + Send>(
+            &self,
+            _src_bucket: &str,
+            _src_prefix: &str,
+            _dst_bucket: &str,
+            _dst_prefix: &str,
+            _max_concurrent_requests: usize,
+            _f: F,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn open_management_console_buckets(&self) -> Result<()> {
+            Ok(())
+        }
+        fn open_management_console_list(&self, _bucket: &str, _prefix: &str) -> Result<()> {
+            Ok(())
+        }
+        fn open_management_console_object(&self, _bucket: &str, _prefix: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_go_to_path_sends_event_and_clears_stack() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw.clone()));
+
+        // Push two dummy pages to make len > 1 (first push replaces Initializing)
+        let dummy_ctx = Rc::new(AppContext::default());
+        let page1 =
+            Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
+        let page2 =
+            Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
+        app.page_stack.push(page1);
+        app.page_stack.push(page2);
+        assert!(app.page_stack.len() > 1);
+
+        let key = ObjectKey::with_prefix("bucket", "a/b/".to_string());
+        app.go_to_path(key.clone());
+
+        // stack is cleared back to initializing
+        assert_eq!(app.page_stack.len(), 1);
+
+        // receive LoadObjects event
+        let ev = rx.recv().await.expect("event");
+        match ev {
+            AppEventType::LoadObjects(k) => assert_eq!(k, key),
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_paste_object_file_and_dir_specs() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
+
+        let base_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+
+        // File case
+        let file_item = ObjectItem::File {
+            name: "file.txt".to_string(),
+            size_byte: 1,
+            last_modified: DateTime::<Local>::default(),
+            key: "dir1/file.txt".to_string(),
+            s3_uri: "".into(),
+            arn: "".into(),
+            object_url: "".into(),
+            e_tag: "".into(),
+        };
+        app.clipboard = Some((base_key.clone(), file_item));
+        let dest = ObjectKey::with_prefix("bucket", "dst/".to_string());
+        app.start_paste_object(dest.clone());
+        match rx.recv().await.expect("event") {
+            AppEventType::OpenPasteConfirmDialog(spec) => {
+                assert_eq!(spec.src_bucket, "bucket");
+                assert_eq!(spec.dst_bucket, "bucket");
+                assert_eq!(spec.dst_key, "dst/file.txt");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+
+        // Dir case
+        let dir_item = ObjectItem::Dir {
+            name: "dir2".to_string(),
+            key: "dir1/dir2/".to_string(),
+            s3_uri: "".into(),
+            object_url: "".into(),
+        };
+        app.clipboard = Some((base_key, dir_item));
+        app.start_paste_object(dest);
+        match rx.recv().await.expect("event") {
+            AppEventType::OpenPasteConfirmDialog(spec) => {
+                assert_eq!(spec.dst_key, "dst/dir2/");
+            }
+            other => panic!("unexpected event: {:?}", other),
         }
     }
 }
