@@ -24,6 +24,8 @@ pub enum AppEventType {
     ReloadBuckets,
     CompleteReloadBuckets(Result<CompleteReloadBucketsResult>),
     LoadObjects(ObjectKey),
+    // Direct navigation to a specific path within a bucket
+    GoToPath(ObjectKey),
     CompleteLoadObjects(Result<CompleteLoadObjectsResult>),
     ReloadObjects,
     CompleteReloadObjects(Result<CompleteReloadObjectsResult>),

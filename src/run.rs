@@ -85,6 +85,9 @@ pub async fn run<B: Backend, C: Client>(
             AppEventType::LoadObjects(object_key) => {
                 app.load_objects(object_key);
             }
+            AppEventType::GoToPath(object_key) => {
+                app.go_to_path(object_key);
+            }
             AppEventType::CompleteLoadObjects(result) => {
                 app.complete_load_objects(result);
             }

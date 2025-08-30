@@ -54,6 +54,7 @@ enum ViewState {
     Default,
     FilterDialog,
     SortDialog,
+    GoToPathDialog(InputDialogState),
     CopyDetailDialog(Box<CopyDetailDialogState>),
     DownloadConfirmDialog(Vec<DownloadObjectInfo>, ConfirmDialogState, bool),
     SaveDialog(InputDialogState, Option<Vec<DownloadObjectInfo>>),
@@ -125,6 +126,9 @@ impl ObjectListPage {
                     UserEvent::ObjectListSort => {
                         self.open_sort_dialog();
                     }
+                    UserEvent::ObjectListGoToPath => {
+                        self.open_go_to_path_dialog();
+                    }
                     UserEvent::ObjectListCopyObject if self.non_empty() => {
                         let object_key = self.current_selected_object_key();
                         let object_item = self.current_selected_item().to_owned();
@@ -148,6 +152,28 @@ impl ObjectListPage {
                     }
                     UserEvent::ObjectListResetFilter => {
                         self.reset_filter();
+                    }
+                }
+            }
+            ViewState::GoToPathDialog(ref mut state) => {
+                handle_user_events_with_default! { user_events =>
+                    UserEvent::InputDialogClose => {
+                        self.view_state = ViewState::Default;
+                    }
+                    UserEvent::InputDialogApply => {
+                        let input = state.input().trim().to_string();
+                        let object_key = ObjectKey::with_prefix(
+                            self.object_key.bucket_name.clone(),
+                            input,
+                        );
+                        self.tx.send(AppEventType::GoToPath(object_key));
+                        self.view_state = ViewState::Default;
+                    }
+                    UserEvent::Help => {
+                        self.tx.send(AppEventType::OpenHelp);
+                    }
+                    => {
+                        state.handle_key_event(key_event);
                     }
                 }
             }
@@ -288,6 +314,17 @@ impl ObjectListPage {
             f.set_cursor_position((cursor_x, cursor_y));
         }
 
+        if let ViewState::GoToPathDialog(state) = &mut self.view_state {
+            let dialog = InputDialog::default()
+                .title("Go To Path")
+                .max_width(50)
+                .theme(&self.ctx.theme);
+            f.render_stateful_widget(dialog, area, state);
+
+            let (cursor_x, cursor_y) = state.cursor();
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+
         if let ViewState::SortDialog = self.view_state {
             let sort_dialog =
                 ObjectListSortDialog::new(self.sort_dialog_state).theme(&self.ctx.theme);
@@ -340,6 +377,7 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListBack, "Go back to prev folder"),
                         BuildHelpsItem::new(UserEvent::ObjectListBucketList, "Go back to bucket list"),
                         BuildHelpsItem::new(UserEvent::ObjectListFilter, "Filter object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListGoToPath, "Go to path"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
@@ -363,6 +401,7 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListBack, "Go back to prev folder"),
                         BuildHelpsItem::new(UserEvent::ObjectListBucketList, "Go back to bucket list"),
                         BuildHelpsItem::new(UserEvent::ObjectListFilter, "Filter object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListGoToPath, "Go to path"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
@@ -373,6 +412,13 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListManagementConsole, "Open management console in browser"),
                     ]
                 }
+            },
+            ViewState::GoToPathDialog(_) => {
+                vec![
+                    BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
+                    BuildHelpsItem::new(UserEvent::InputDialogClose, "Close go to path"),
+                    BuildHelpsItem::new(UserEvent::InputDialogApply, "Go to path"),
+                ]
             },
             ViewState::FilterDialog => {
                 vec![
@@ -464,6 +510,13 @@ impl ObjectListPage {
                     ]
                 }
             },
+            ViewState::GoToPathDialog(_) => {
+                vec![
+                    BuildShortHelpsItem::single(UserEvent::InputDialogClose, "Close", 2),
+                    BuildShortHelpsItem::single(UserEvent::InputDialogApply, "Go", 1),
+                    BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
+                ]
+            }
             ViewState::FilterDialog => {
                 vec![
                     BuildShortHelpsItem::single(UserEvent::InputDialogClose, "Close", 2),
@@ -558,6 +611,11 @@ impl ObjectListPage {
         self.sort_dialog_state.reset();
 
         self.sort_view_indices();
+    }
+
+    fn open_go_to_path_dialog(&mut self) {
+        let prefix = self.current_dir_object_key().joined_object_path(false);
+        self.view_state = ViewState::GoToPathDialog(InputDialogState::new(prefix));
     }
 
     fn open_copy_detail_dialog(&mut self) {

@@ -241,6 +241,13 @@ impl<C: Client> App<C> {
         self.is_loading = true;
     }
 
+    pub fn go_to_path(&mut self, object_key: ObjectKey) {
+        // Replace current view with the target path and load its objects
+        self.page_stack.clear();
+        self.tx.send(AppEventType::LoadObjects(object_key));
+        self.is_loading = true;
+    }
+
     pub fn back_to_bucket_list(&mut self) {
         if self.app_objects.get_bucket_items().len() == 1 {
             return;

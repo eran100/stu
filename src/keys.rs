@@ -38,6 +38,7 @@ pub enum UserEvent {
     ObjectListDownloadObjectAs,
     ObjectListFilter,
     ObjectListSort,
+    ObjectListGoToPath,
     ObjectListCopyObject,
     ObjectListPasteObject,
     ObjectListCopyDetails,
@@ -153,6 +154,7 @@ fn build_user_event_mapper(
     set_event_to_map(&mut map, &bindings, "object_list", "download_as", UserEvent::ObjectListDownloadObjectAs)?;
     set_event_to_map(&mut map, &bindings, "object_list", "filter", UserEvent::ObjectListFilter)?;
     set_event_to_map(&mut map, &bindings, "object_list", "sort", UserEvent::ObjectListSort)?;
+    set_event_to_map(&mut map, &bindings, "object_list", "go_to_path", UserEvent::ObjectListGoToPath)?;
     set_event_to_map(&mut map, &bindings, "object_list", "copy_object", UserEvent::ObjectListCopyObject)?;
     set_event_to_map(&mut map, &bindings, "object_list", "paste_object", UserEvent::ObjectListPasteObject)?;
     set_event_to_map(&mut map, &bindings, "object_list", "copy_details", UserEvent::ObjectListCopyDetails)?;
