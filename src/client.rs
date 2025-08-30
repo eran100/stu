@@ -420,27 +420,30 @@ impl Client for AwsSdkClient {
         // Concurrency comes from config; clamp to at least 1.
         let concurrency: usize = max_concurrent_requests.max(1);
         let s3 = self.client.clone();
-        let src_bucket = src_bucket.to_string();
-        let dst_bucket = dst_bucket.to_string();
+        // Wrap repeatedly reused strings in Arc to avoid per-item cloning allocations
+        let src_bucket = std::sync::Arc::new(src_bucket.to_string());
+        let dst_bucket = std::sync::Arc::new(dst_bucket.to_string());
+        let src_prefix = std::sync::Arc::new(src_prefix);
+        let dst_prefix = std::sync::Arc::new(dst_prefix);
 
         let mut iter = futures::stream::iter(objs.into_iter().map(|obj| {
             let s3 = s3.clone();
-            let src_bucket = src_bucket.clone();
-            let dst_bucket = dst_bucket.clone();
-            let src_prefix = src_prefix.clone();
-            let dst_prefix = dst_prefix.clone();
+            let src_bucket = std::sync::Arc::clone(&src_bucket);
+            let dst_bucket = std::sync::Arc::clone(&dst_bucket);
+            let src_prefix = std::sync::Arc::clone(&src_prefix);
+            let dst_prefix = std::sync::Arc::clone(&dst_prefix);
             async move {
                 // Compute destination key preserving the suffix relative to src_prefix
                 let suffix = obj
                     .key
-                    .strip_prefix(&src_prefix)
+                    .strip_prefix(&**src_prefix)
                     .unwrap_or(&obj.key)
                     .to_string();
-                let dst_key = format!("{}{}", dst_prefix, suffix);
-                let copy_source = format!("{}/{}", src_bucket, obj.key);
+                let dst_key = format!("{}{}", &**dst_prefix, suffix);
+                let copy_source = format!("{}/{}", &**src_bucket, obj.key);
                 let result = s3
                     .copy_object()
-                    .bucket(&dst_bucket)
+                    .bucket(&**dst_bucket)
                     .key(&dst_key)
                     .copy_source(copy_source)
                     .send()

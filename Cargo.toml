@@ -1,10 +1,10 @@
 [package]
 name = "stu"
-version = "0.7.4"
+version = "0.7.5"
 description = "TUI application for AWS S3 written in Rust using ratatui"
 authors = ["Kyosuke Fujimoto <kyoro.f@gmail.com>"]
-homepage = "https://lusingander.github.io/stu/"
-repository = "https://github.com/lusingander/stu"
+homepage = "https://github.com/eran100/stu"
+repository = "https://github.com/eran100/stu"
 readme = "README.md"
 license = "MIT"
 keywords = ["s3", "aws", "cli", "tui", "terminal"]
@@ -51,6 +51,7 @@ tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.19", features = ["chrono"] }
 tui-input = "0.14.0"
 umbra = "0.4.0"
+unicode-width = "0.1.14"
 
 [dev-dependencies]
 rstest = "0.26.1"

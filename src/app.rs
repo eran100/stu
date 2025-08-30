@@ -843,43 +843,28 @@ impl<C: Client> App<C> {
             return;
         };
 
-        match item {
-            ObjectItem::Dir { name, key, .. } => {
-                let src_bucket = src_key_base.bucket_name.clone();
-                let src_key = key.clone(); // expected to end with '/'
-                let dst_bucket = dest_dir_key.bucket_name.clone();
-                let mut dst_key = dest_dir_key.joined_object_path(false);
-                dst_key.push_str(name);
-                if !dst_key.ends_with('/') {
-                    dst_key.push('/');
-                }
+        let (name, src_key, is_dir) = match item {
+            ObjectItem::Dir { name, key, .. } => (name.clone(), key.clone(), true),
+            ObjectItem::File { name, key, .. } => (name.clone(), key.clone(), false),
+        };
 
-                let spec = crate::event::PasteSpec {
-                    src_bucket,
-                    src_key,
-                    dst_bucket,
-                    dst_key,
-                    name: name.clone(),
-                };
-                self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
-            }
-            ObjectItem::File { name, key, .. } => {
-                let src_bucket = src_key_base.bucket_name.clone();
-                let src_key = key.clone();
-                let dst_bucket = dest_dir_key.bucket_name.clone();
-                let mut dst_key = dest_dir_key.joined_object_path(false);
-                dst_key.push_str(name);
+        let src_bucket = src_key_base.bucket_name.clone();
+        let dst_bucket = dest_dir_key.bucket_name.clone();
 
-                let spec = crate::event::PasteSpec {
-                    src_bucket,
-                    src_key,
-                    dst_bucket,
-                    dst_key,
-                    name: name.clone(),
-                };
-                self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
-            }
+        let mut dst_key = dest_dir_key.joined_object_path(false);
+        dst_key.push_str(&name);
+        if is_dir && !dst_key.ends_with('/') {
+            dst_key.push('/');
         }
+
+        let spec = crate::event::PasteSpec {
+            src_bucket,
+            src_key,
+            dst_bucket,
+            dst_key,
+            name,
+        };
+        self.tx.send(AppEventType::OpenPasteConfirmDialog(spec));
     }
 
     pub fn open_paste_confirm_dialog(&mut self, spec: crate::event::PasteSpec) {

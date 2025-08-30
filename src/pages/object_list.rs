@@ -489,8 +489,8 @@ impl ObjectListPage {
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
                         BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 7),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
                 } else {
@@ -504,8 +504,8 @@ impl ObjectListPage {
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
                         BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 7),
-                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 7),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
                         BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                     ]
                 }
@@ -1156,16 +1156,20 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
 }
 
 fn wrap_strict_by_char_width(s: &str, max_width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut count = 0usize;
     for ch in s.chars() {
-        if count >= max_width {
-            lines.push(std::mem::take(&mut cur));
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if count + char_width > max_width {
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+            }
             count = 0;
         }
         cur.push(ch);
-        count += 1; // Assumes ASCII-width; S3 paths are typically ASCII.
+        count += char_width;
     }
     if !cur.is_empty() {
         lines.push(cur);
