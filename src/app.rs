@@ -831,8 +831,8 @@ impl<C: Client> App<C> {
     }
 
     pub fn copy_object(&mut self, object_key: ObjectKey, object_item: ObjectItem) {
-        self.clipboard = Some((object_key.clone(), object_item.clone()));
         let name = object_item.name().to_string();
+        self.clipboard = Some((object_key, object_item));
         let msg = format!("Copied '{name}' to clipboard");
         self.success_notification(msg);
     }

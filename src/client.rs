@@ -451,11 +451,16 @@ impl Client for AwsSdkClient {
         .buffered(concurrency);
 
         let mut cur_count = 0usize;
+        // Throttle progress callbacks to avoid overwhelming the UI.
+        // Aim for at most ~50 updates; always notify on the last item.
+        let notify_every: usize = (total_count / 50).max(1);
         while let Some(res) = iter.next().await {
             match res {
                 Ok(()) => {
                     cur_count += 1;
-                    f(cur_count, total_count);
+                    if cur_count % notify_every == 0 || cur_count == total_count {
+                        f(cur_count, total_count);
+                    }
                 }
                 Err(e) => return Err(e),
             }

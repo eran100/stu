@@ -1086,8 +1086,8 @@ fn build_paste_confirm_message_lines<'a>(
 }
 
 fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
-    // Fast path when it already fits.
-    if s.chars().count() <= max_width {
+    // Fast path when it already fits (Unicode display width).
+    if unicode_width::UnicodeWidthStr::width(s) <= max_width {
         return vec![s.to_string()];
     }
 
@@ -1125,7 +1125,10 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
             format!("/{}", segment)
         };
 
-        if current.chars().count() + to_append.chars().count() <= max_width {
+        if unicode_width::UnicodeWidthStr::width(current.as_str())
+            + unicode_width::UnicodeWidthStr::width(to_append.as_str())
+            <= max_width
+        {
             current.push_str(&to_append);
             continue;
         }
@@ -1230,9 +1233,9 @@ mod tests {
         let lines = wrap_path_with_prefix(&s, "s3://", 12);
         assert!(lines.len() >= 2);
         assert!(lines[0].starts_with("s3://"));
-        // No line should exceed max width in characters (approx; true width is handled by strict wrapper)
+        // No line should exceed max display width
         for line in &lines {
-            assert!(line.chars().count() <= 12, "line too wide: {}", line);
+            assert!(unicode_width::UnicodeWidthStr::width(line.as_str()) <= 12, "line too wide: {}", line);
         }
         // Concatenation should reconstruct the path for this case
         assert_eq!(lines.join(""), s);
