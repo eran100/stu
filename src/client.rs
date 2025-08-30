@@ -401,20 +401,8 @@ impl Client for AwsSdkClient {
         f: F,
     ) -> Result<()> {
         // Normalize prefixes to end with '/'
-        let src_prefix = {
-            let mut s = src_prefix.to_string();
-            if !s.ends_with('/') {
-                s.push('/');
-            }
-            s
-        };
-        let dst_prefix = {
-            let mut s = dst_prefix.to_string();
-            if !s.ends_with('/') {
-                s.push('/');
-            }
-            s
-        };
+        let src_prefix = normalize_prefix(src_prefix);
+        let dst_prefix = normalize_prefix(dst_prefix);
 
         let objs = self
             .list_all_download_objects(src_bucket, &src_prefix)
@@ -538,6 +526,15 @@ fn compute_dst_key(src_prefix: &str, dst_prefix: &str, obj_key: &str) -> (String
     (suffix, dst_key)
 }
 
+/// Normalize a prefix to always end with '/'
+fn normalize_prefix(prefix: &str) -> String {
+    let mut s = prefix.to_string();
+    if !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
 // tests are defined at the end of file to avoid clippy items-after-test-module
 
 fn objects_output_to_files(
@@ -631,5 +628,20 @@ mod tests {
         let (suffix, dst) = compute_dst_key("src/", "dst/", "other/x");
         assert_eq!(suffix, "other/x");
         assert_eq!(dst, "dst/other/x");
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_prefix;
+
+    #[test]
+    fn test_normalize_prefix_adds_slash() {
+        assert_eq!(normalize_prefix("abc"), "abc/");
+    }
+
+    #[test]
+    fn test_normalize_prefix_keeps_slash() {
+        assert_eq!(normalize_prefix("abc/"), "abc/");
     }
 }

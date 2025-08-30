@@ -1106,6 +1106,23 @@ fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
 ///   This keeps segments as intact as possible to improve readability, while ensuring each
 ///   resulting line does not exceed `max_width` display columns.
 fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String> {
+    // Helper to wrap `text_to_wrap` and append resulting chunks into `lines`,
+    // leaving the last chunk in `current` so subsequent segments can be appended.
+    fn append_wrapped_chunks(
+        lines: &mut Vec<String>,
+        current: &mut String,
+        text_to_wrap: &str,
+        max_width: usize,
+    ) {
+        let mut chunks = wrap_strict_by_char_width(text_to_wrap, max_width);
+        if chunks.is_empty() {
+            return;
+        }
+        let last_chunk = chunks.pop().unwrap();
+        lines.extend(chunks);
+        *current = last_chunk;
+    }
+
     let mut lines: Vec<String> = Vec::new();
 
     // Safety: `prefix` is ASCII here; slicing by byte length is fine.
@@ -1139,8 +1156,9 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
             let cur_w = unicode_width::UnicodeWidthStr::width(current.as_str());
             let remain = max_width.saturating_sub(cur_w);
             if remain == 0 {
-                // No space left; flush prefix as its own line
+                // No space left; flush prefix as its own line and wrap the segment.
                 lines.push(std::mem::take(&mut current));
+                append_wrapped_chunks(&mut lines, &mut current, segment, max_width);
             } else {
                 // Split the first segment so that the first chunk fits on the current line
                 let (head, tail) = split_by_display_width(segment, remain);
@@ -1149,14 +1167,7 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
 
                 // Wrap the remaining part of the segment across subsequent lines
                 if !tail.is_empty() {
-                    let mut chunks = wrap_strict_by_char_width(&tail, max_width);
-                    if let Some(first) = chunks.first() {
-                        current = first.clone();
-                    }
-                    for c in chunks.drain(1..) {
-                        lines.push(std::mem::take(&mut current));
-                        current = c;
-                    }
+                    append_wrapped_chunks(&mut lines, &mut current, &tail, max_width);
                 }
             }
         } else {
@@ -1164,21 +1175,7 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
             if !current.is_empty() {
                 lines.push(std::mem::take(&mut current));
             }
-
-            let seg_with_lead = if i == 0 {
-                segment.to_string()
-            } else {
-                format!("/{}", segment)
-            };
-            let mut chunks = wrap_strict_by_char_width(&seg_with_lead, max_width);
-            if let Some(first) = chunks.first() {
-                current = first.clone();
-            }
-            // Push remaining chunks as complete lines; keep last chunk in `current` to try and grow with next segments.
-            for c in chunks.drain(1..) {
-                lines.push(std::mem::take(&mut current));
-                current = c;
-            }
+            append_wrapped_chunks(&mut lines, &mut current, &to_append, max_width);
         }
     }
 
