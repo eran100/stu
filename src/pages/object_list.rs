@@ -1099,6 +1099,12 @@ fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
     }
 }
 
+/// Wrap an S3 path that begins with a known ASCII prefix (e.g. "s3://") so that:
+/// - The first line starts with the prefix and adds as many subsequent segments as fit.
+/// - Subsequent lines continue with remaining segments, splitting overly long segments as needed.
+/// - Empty segments are skipped.
+/// This keeps segments as intact as possible to improve readability, while ensuring each
+/// resulting line does not exceed `max_width` display columns.
 fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
 
@@ -1155,6 +1161,8 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
     lines
 }
 
+/// Strictly wrap by display width (taking Unicode width into account).
+/// Splits exactly at the column limit without hyphenation.
 fn wrap_strict_by_char_width(s: &str, max_width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
     let mut lines: Vec<String> = Vec::new();
@@ -1190,6 +1198,72 @@ mod tests {
         style::{Color, Modifier},
         Terminal,
     };
+
+    #[test]
+    fn test_wrap_strict_by_char_width_ascii() {
+        let lines = wrap_strict_by_char_width("abcdef", 3);
+        assert_eq!(lines, vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn test_wrap_strict_by_char_width_wide() {
+        // '界' has width 2; 'A' width 1
+        let s = "A世界A"; // widths: 1,2,2,1
+        let lines = wrap_strict_by_char_width(s, 3);
+        // Expect split like: "A世" (1+2=3), then "界A" (2+1=3)
+        assert_eq!(lines, vec!["A世", "界A"]);
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_basic() {
+        let s = "s3://bucket/longsegment/short";
+        let lines = wrap_path_with_prefix(s, "s3://", 12);
+        // First line should start with prefix and include as much as possible
+        assert!(lines[0].starts_with("s3://"));
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_long_single_segment() {
+        let long_seg = "A".repeat(50);
+        let s = format!("s3://bucket/{}", long_seg);
+        let lines = wrap_path_with_prefix(&s, "s3://", 12);
+        assert!(lines.len() >= 2);
+        assert!(lines[0].starts_with("s3://"));
+        // No line should exceed max width in characters (approx; true width is handled by strict wrapper)
+        for line in &lines {
+            assert!(line.chars().count() <= 12, "line too wide: {}", line);
+        }
+        // Concatenation should reconstruct the path for this case
+        assert_eq!(lines.join(""), s);
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_consecutive_slashes() {
+        let s = "s3://bucket///dir//file";
+        let lines = wrap_path_with_prefix(s, "s3://", 20);
+        assert!(!lines.is_empty());
+        // After the initial prefix, there should be no duplicate slashes
+        for (i, line) in lines.iter().enumerate() {
+            let check = if i == 0 { line.trim_start_matches("s3://") } else { line.as_str() };
+            assert!(!check.contains("//"), "found duplicate slashes in line: {}", line);
+        }
+    }
+
+    #[test]
+    fn test_wrap_s3_path_for_dialog_non_s3_fallback() {
+        use unicode_width::UnicodeWidthStr;
+        let s = "bucket/dir/世界"; // includes wide chars
+        let max = 5;
+        let lines = wrap_s3_path_for_dialog(s, max);
+        assert!(lines.len() >= 2);
+        // Ensure none exceeds max display width
+        for line in &lines {
+            assert!(UnicodeWidthStr::width(line.as_str()) <= max);
+        }
+        // Reconstruct original
+        assert_eq!(lines.join(""), s);
+    }
 
     #[tokio::test]
     async fn test_render_without_scroll() -> std::io::Result<()> {

@@ -434,12 +434,7 @@ impl Client for AwsSdkClient {
             let dst_prefix = std::sync::Arc::clone(&dst_prefix);
             async move {
                 // Compute destination key preserving the suffix relative to src_prefix
-                let suffix = obj
-                    .key
-                    .strip_prefix(&**src_prefix)
-                    .unwrap_or(&obj.key)
-                    .to_string();
-                let dst_key = format!("{}{}", &**dst_prefix, suffix);
+                let (_, dst_key) = compute_dst_key(&src_prefix, &dst_prefix, &obj.key);
                 let copy_source = format!("{}/{}", &**src_bucket, obj.key);
                 let result = s3
                     .copy_object()
@@ -520,6 +515,37 @@ fn objects_output_to_dirs(
         })
         .filter(|f| !f.name().is_empty()) // skip dummy empty object
         .collect()
+}
+
+/// Compute the destination key for copy_prefix by preserving the suffix relative to `src_prefix`
+/// and concatenating it to `dst_prefix`.
+/// Returns `(suffix, dst_key)`.
+fn compute_dst_key(src_prefix: &str, dst_prefix: &str, obj_key: &str) -> (String, String) {
+    let suffix = obj_key
+        .strip_prefix(src_prefix)
+        .unwrap_or(obj_key)
+        .to_string();
+    let dst_key = format!("{}{}", dst_prefix, suffix);
+    (suffix, dst_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_dst_key;
+
+    #[test]
+    fn test_compute_dst_key_preserves_suffix() {
+        let (suffix, dst) = compute_dst_key("src/", "dst/", "src/a/b.txt");
+        assert_eq!(suffix, "a/b.txt");
+        assert_eq!(dst, "dst/a/b.txt");
+    }
+
+    #[test]
+    fn test_compute_dst_key_when_no_prefix_match() {
+        let (suffix, dst) = compute_dst_key("src/", "dst/", "other/x");
+        assert_eq!(suffix, "other/x");
+        assert_eq!(dst, "dst/other/x");
+    }
 }
 
 fn objects_output_to_files(
