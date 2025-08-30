@@ -529,24 +529,7 @@ fn compute_dst_key(src_prefix: &str, dst_prefix: &str, obj_key: &str) -> (String
     (suffix, dst_key)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::compute_dst_key;
-
-    #[test]
-    fn test_compute_dst_key_preserves_suffix() {
-        let (suffix, dst) = compute_dst_key("src/", "dst/", "src/a/b.txt");
-        assert_eq!(suffix, "a/b.txt");
-        assert_eq!(dst, "dst/a/b.txt");
-    }
-
-    #[test]
-    fn test_compute_dst_key_when_no_prefix_match() {
-        let (suffix, dst) = compute_dst_key("src/", "dst/", "other/x");
-        assert_eq!(suffix, "other/x");
-        assert_eq!(dst, "dst/other/x");
-    }
-}
+// tests are defined at the end of file to avoid clippy items-after-test-module
 
 fn objects_output_to_files(
     region: &str,
@@ -621,4 +604,23 @@ fn build_object_arn(bucket: &str, key: &str) -> String {
 
 fn build_object_url(region: &str, bucket: &str, key: &str) -> String {
     format!("https://{bucket}.s3.{region}.amazonaws.com/{key}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_dst_key;
+
+    #[test]
+    fn test_compute_dst_key_preserves_suffix() {
+        let (suffix, dst) = compute_dst_key("src/", "dst/", "src/a/b.txt");
+        assert_eq!(suffix, "a/b.txt");
+        assert_eq!(dst, "dst/a/b.txt");
+    }
+
+    #[test]
+    fn test_compute_dst_key_when_no_prefix_match() {
+        let (suffix, dst) = compute_dst_key("src/", "dst/", "other/x");
+        assert_eq!(suffix, "other/x");
+        assert_eq!(dst, "dst/other/x");
+    }
 }

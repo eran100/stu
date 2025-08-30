@@ -1103,8 +1103,8 @@ fn wrap_s3_path_for_dialog(s: &str, max_width: usize) -> Vec<String> {
 /// - The first line starts with the prefix and adds as many subsequent segments as fit.
 /// - Subsequent lines continue with remaining segments, splitting overly long segments as needed.
 /// - Empty segments are skipped.
-/// This keeps segments as intact as possible to improve readability, while ensuring each
-/// resulting line does not exceed `max_width` display columns.
+///   This keeps segments as intact as possible to improve readability, while ensuring each
+///   resulting line does not exceed `max_width` display columns.
 fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
 
@@ -1245,8 +1245,16 @@ mod tests {
         assert!(!lines.is_empty());
         // After the initial prefix, there should be no duplicate slashes
         for (i, line) in lines.iter().enumerate() {
-            let check = if i == 0 { line.trim_start_matches("s3://") } else { line.as_str() };
-            assert!(!check.contains("//"), "found duplicate slashes in line: {}", line);
+            let check = if i == 0 {
+                line.trim_start_matches("s3://")
+            } else {
+                line.as_str()
+            };
+            assert!(
+                !check.contains("//"),
+                "found duplicate slashes in line: {}",
+                line
+            );
         }
     }
 

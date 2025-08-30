@@ -873,7 +873,10 @@ impl<C: Client> App<C> {
                 page.open_paste_confirm_dialog(spec);
             }
             page => {
-                tracing::error!("Attempted to open paste confirm dialog from invalid page: {:?}", page);
+                tracing::error!(
+                    "Attempted to open paste confirm dialog from invalid page: {:?}",
+                    page
+                );
                 self.warn_notification("Cannot paste from this page.".to_string());
             }
         }
@@ -1056,6 +1059,7 @@ mod tests {
     #[derive(Debug)]
     struct FakeClient;
 
+    #[allow(clippy::manual_async_fn)]
     impl Client for FakeClient {
         fn region(&self) -> &str {
             "us-east-1"
@@ -1084,11 +1088,7 @@ mod tests {
             _key: &str,
             _name: &str,
         ) -> impl std::future::Future<Output = Result<FileDetail>> + Send {
-            async {
-                Err(AppError::msg(
-                    "not used in this test: load_object_detail",
-                ))
-            }
+            async { Err(AppError::msg("not used in this test: load_object_detail")) }
         }
         fn load_object_versions(
             &self,
@@ -1154,8 +1154,10 @@ mod tests {
 
         // Push two dummy pages to make len > 1 (first push replaces Initializing)
         let dummy_ctx = Rc::new(AppContext::default());
-        let page1 = Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
-        let page2 = Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
+        let page1 =
+            Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
+        let page2 =
+            Page::of_bucket_list(vec![], Rc::clone(&dummy_ctx), Sender::new(tx_raw.clone()));
         app.page_stack.push(page1);
         app.page_stack.push(page2);
         assert!(app.page_stack.len() > 1);
@@ -1177,7 +1179,6 @@ mod tests {
     #[tokio::test]
     async fn test_start_paste_object_file_and_dir_specs() {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let tx = Sender::new(tx_raw.clone());
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
         let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
