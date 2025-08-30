@@ -928,14 +928,14 @@ impl<C: Client> App<C> {
             Ok(crate::event::CompletePasteObjectResult { name }) => {
                 let msg = format!("Copied '{name}' successfully");
                 self.success_notification(msg);
-                // Refresh current object list
+                // Refresh current object list; loading state will be managed by the reload flow.
                 self.tx.send(AppEventType::ObjectListRefresh);
             }
             Err(e) => {
                 self.tx.send(AppEventType::NotifyError(e));
+                self.is_loading = false;
             }
         }
-        self.is_loading = false;
     }
 
     pub fn loading(&self) -> bool {

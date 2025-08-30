@@ -401,15 +401,19 @@ impl Client for AwsSdkClient {
         f: F,
     ) -> Result<()> {
         // Normalize prefixes to end with '/'
-        let src_prefix = if src_prefix.ends_with('/') {
-            src_prefix.to_string()
-        } else {
-            format!("{}/", src_prefix)
+        let src_prefix = {
+            let mut s = src_prefix.to_string();
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s
         };
-        let dst_prefix = if dst_prefix.ends_with('/') {
-            dst_prefix.to_string()
-        } else {
-            format!("{}/", dst_prefix)
+        let dst_prefix = {
+            let mut s = dst_prefix.to_string();
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s
         };
 
         let objs = self
