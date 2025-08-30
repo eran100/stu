@@ -161,7 +161,10 @@ impl ObjectListPage {
                         self.view_state = ViewState::Default;
                     }
                     UserEvent::InputDialogApply => {
-                        let input = state.input().trim().to_string();
+                        let mut input = state.input().trim().to_string();
+                        if !input.is_empty() && !input.ends_with('/') {
+                            input.push('/');
+                        }
                         let object_key = ObjectKey::with_prefix(
                             self.object_key.bucket_name.clone(),
                             input,
@@ -1116,6 +1119,7 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
     ) {
         let mut chunks = wrap_strict_by_char_width(text_to_wrap, max_width);
         if chunks.is_empty() {
+            current.clear();
             return;
         }
         let last_chunk = chunks.pop().unwrap();

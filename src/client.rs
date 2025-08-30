@@ -520,7 +520,7 @@ fn objects_output_to_dirs(
 fn compute_dst_key(src_prefix: &str, dst_prefix: &str, obj_key: &str) -> (String, String) {
     let suffix = obj_key
         .strip_prefix(src_prefix)
-        .unwrap_or(obj_key)
+        .expect("object key should have the source prefix")
         .to_string();
     let dst_key = format!("{}{}", dst_prefix, suffix);
     (suffix, dst_key)
@@ -624,10 +624,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "object key should have the source prefix")]
     fn test_compute_dst_key_when_no_prefix_match() {
-        let (suffix, dst) = compute_dst_key("src/", "dst/", "other/x");
-        assert_eq!(suffix, "other/x");
-        assert_eq!(dst, "dst/other/x");
+        let _ = compute_dst_key("src/", "dst/", "other/x");
     }
 }
 
