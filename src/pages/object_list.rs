@@ -1133,27 +1133,52 @@ fn wrap_path_with_prefix(s: &str, prefix: &str, max_width: usize) -> Vec<String>
             continue;
         }
 
-        // Flush current line if it has content.
-        if !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
+        // If the first segment is too long to fit after the prefix, try to fill the first line
+        // by appending as much of the segment as fits, instead of flushing the prefix alone.
+        if i == 0 && current == prefix {
+            let cur_w = unicode_width::UnicodeWidthStr::width(current.as_str());
+            let remain = max_width.saturating_sub(cur_w);
+            if remain == 0 {
+                // No space left; flush prefix as its own line
+                lines.push(std::mem::take(&mut current));
+            } else {
+                // Split the first segment so that the first chunk fits on the current line
+                let (head, tail) = split_by_display_width(segment, remain);
+                current.push_str(&head);
+                lines.push(std::mem::take(&mut current));
 
-        // Now place this segment (with leading slash) across as many lines as needed.
-        let seg_with_lead = if i == 0 {
-            segment.to_string()
+                // Wrap the remaining part of the segment across subsequent lines
+                if !tail.is_empty() {
+                    let mut chunks = wrap_strict_by_char_width(&tail, max_width);
+                    if let Some(first) = chunks.first() {
+                        current = first.clone();
+                    }
+                    for c in chunks.drain(1..) {
+                        lines.push(std::mem::take(&mut current));
+                        current = c;
+                    }
+                }
+            }
         } else {
-            format!("/{}", segment)
-        };
-        let mut chunks = wrap_strict_by_char_width(&seg_with_lead, max_width);
-        if let Some(first) = chunks.first() {
-            current = first.clone();
-        } else {
-            current.clear();
-        }
-        // Push remaining chunks as complete lines; keep last chunk in `current` to try and grow with next segments.
-        for c in chunks.drain(1..) {
-            lines.push(std::mem::take(&mut current));
-            current = c;
+            // General case: flush current and wrap this segment (including its leading slash when i > 0)
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+
+            let seg_with_lead = if i == 0 {
+                segment.to_string()
+            } else {
+                format!("/{}", segment)
+            };
+            let mut chunks = wrap_strict_by_char_width(&seg_with_lead, max_width);
+            if let Some(first) = chunks.first() {
+                current = first.clone();
+            }
+            // Push remaining chunks as complete lines; keep last chunk in `current` to try and grow with next segments.
+            for c in chunks.drain(1..) {
+                lines.push(std::mem::take(&mut current));
+                current = c;
+            }
         }
     }
 
@@ -1186,6 +1211,29 @@ fn wrap_strict_by_char_width(s: &str, max_width: usize) -> Vec<String> {
         lines.push(cur);
     }
     lines
+}
+
+// Split a string into a pair of (prefix, suffix) where the prefix's display width
+// does not exceed `max_width`. Uses Unicode width for accurate terminal width handling.
+fn split_by_display_width(s: &str, max_width: usize) -> (String, String) {
+    use unicode_width::UnicodeWidthChar;
+    if max_width == 0 {
+        return (String::new(), s.to_string());
+    }
+    let mut cur_w = 0usize;
+    let mut prefix = String::new();
+    let mut iter = s.chars().peekable();
+    while let Some(&ch) = iter.peek() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cur_w + w > max_width {
+            break;
+        }
+        prefix.push(ch);
+        cur_w += w;
+        iter.next();
+    }
+    let suffix: String = iter.collect();
+    (prefix, suffix)
 }
 
 #[cfg(test)]
@@ -1263,6 +1311,21 @@ mod tests {
                 line
             );
         }
+    }
+
+    #[test]
+    fn test_wrap_path_with_prefix_long_first_segment_fill_first_line() {
+        let s = "s3://this-is-a-very-long-bucket-name/file.txt";
+        let max = 12usize;
+        let lines = wrap_path_with_prefix(s, "s3://", max);
+        assert!(!lines.is_empty());
+        // Ensure first line is not just the prefix when there is remaining space
+        assert!(lines[0].starts_with("s3://"));
+        use unicode_width::UnicodeWidthStr;
+        let prefix_w = UnicodeWidthStr::width("s3://");
+        assert!(UnicodeWidthStr::width(lines[0].as_str()) > prefix_w);
+        // Reconstruct
+        assert_eq!(lines.join(""), s);
     }
 
     #[test]
