@@ -1,5 +1,13 @@
 use crate::config::Config;
 
+// Environment variable names and well-known values
+#[cfg(not(feature = "imggen"))]
+const TERM_PROGRAM_ENV: &str = "TERM_PROGRAM";
+#[cfg(not(feature = "imggen"))]
+const WARP_TERM_PROGRAM: &str = "WarpTerminal";
+#[cfg(not(feature = "imggen"))]
+const WARP_ENV: &str = "WARP";
+
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
     pub image_picker: ImagePicker,
@@ -32,9 +40,9 @@ fn build_image_picker(image_preview_enabled: bool) -> ImagePicker {
                 let detected = picker.protocol_type();
 
                 // Detect Warp terminal via common env vars
-                let term_program = env::var("TERM_PROGRAM").unwrap_or_default();
-                let is_warp = term_program.eq_ignore_ascii_case("WarpTerminal")
-                    || env::var("WARP").is_ok();
+                let term_program = env::var(TERM_PROGRAM_ENV).unwrap_or_default();
+                let is_warp = term_program.eq_ignore_ascii_case(WARP_TERM_PROGRAM)
+                    || env::var(WARP_ENV).is_ok();
 
                 if is_warp {
                     // Prefer text-based rendering in Warp (no inline image support)
@@ -44,7 +52,9 @@ fn build_image_picker(image_preview_enabled: bool) -> ImagePicker {
                 let final_protocol = picker.protocol_type();
                 tracing::info!(
                     "image_picker: term_program={}, detected_protocol={:?}, final_protocol={:?}",
-                    term_program, detected, final_protocol
+                    term_program,
+                    detected,
+                    final_protocol
                 );
                 ImagePicker::Ok(picker)
             }
