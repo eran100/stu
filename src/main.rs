@@ -12,6 +12,7 @@ mod help;
 mod keys;
 mod macros;
 mod object;
+mod profile_input;
 mod pages;
 mod run;
 mod util;
@@ -60,10 +61,6 @@ struct Args {
     #[arg(short, long, value_name = "URL")]
     endpoint_url: Option<String>,
 
-    /// AWS profile name
-    #[arg(short, long, value_name = "NAME")]
-    profile: Option<String>,
-
     /// Target bucket name
     #[arg(short, long, value_name = "NAME")]
     bucket: Option<String>,
@@ -91,11 +88,23 @@ async fn main() -> anyhow::Result<()> {
     let ctx = AppContext::new(config, env, theme);
 
     initialize_debug_log(&args)?;
+    let mut terminal = ratatui::try_init()?;
+    // Prompt for AWS profile using a minimal input dialog
+    let profile = match profile_input::get_profile(&mut terminal) {
+        Ok(p) => p,
+        Err(e) => {
+            // Restore terminal before exiting on cancel/error
+            ratatui::try_restore()?;
+            return Err(e);
+        }
+    };
+
+    let profile_opt = if profile.trim().is_empty() { None } else { Some(profile) };
 
     let client = client::new(
         args.region,
         args.endpoint_url,
-        args.profile,
+        profile_opt,
         ctx.config.default_region.clone(),
         args.path_style.into(),
     )
@@ -105,7 +114,6 @@ async fn main() -> anyhow::Result<()> {
     let mut app = App::new(mapper, client, ctx, tx.clone());
     tx.send(AppEventType::Initialize(args.bucket, args.prefix));
 
-    let mut terminal = ratatui::try_init()?;
     let ret = run::run(&mut app, &mut terminal, rx).await;
     ratatui::try_restore()?;
 
