@@ -98,15 +98,10 @@ impl StatefulWidget for InputDialog {
     type State = InputDialogState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let mut dialog_width = area.width - 4;
-        if let Some(max_width) = self.max_width {
-            dialog_width = dialog_width.min(max_width);
-        }
-        let dialog_height = 3;
-        let dialog_area = calc_centered_dialog_rect(area, dialog_width, dialog_height);
+        let dialog_area = Self::dialog_area_for(area, self.max_width);
 
         // show the last `input_max_width` characters of the input
-        let input_max_width = (dialog_width - 4) as usize;
+        let input_max_width = (dialog_area.width - 4) as usize;
         let input_start_index = state.input.visual_cursor().saturating_sub(input_max_width);
         let input_view: &str = &state.input.value()[input_start_index..];
 

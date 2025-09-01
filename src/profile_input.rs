@@ -27,9 +27,8 @@ const PROFILE_EMPTY_ERR: &str = "Profile cannot be empty";
 pub fn get_profile(
     terminal: &mut Terminal<impl Backend>,
     mapper: &UserEventMapper,
+    theme: &ColorTheme,
 ) -> anyhow::Result<String> {
-    let theme = ColorTheme::default();
-
     let mut state = InputDialogState::default();
     let mut error_msg: Option<String> = None;
 
@@ -40,7 +39,7 @@ pub fn get_profile(
             let dialog = InputDialog::default()
                 .title("AWS Profile")
                 .max_width(max_width)
-                .theme(&theme);
+                .theme(theme);
 
             // Render input dialog
             f.render_stateful_widget(dialog, area, &mut state);
@@ -55,7 +54,7 @@ pub fn get_profile(
                     .y
                     .saturating_add(dialog_area.height)
                     .saturating_add(1);
-                if y >= area.y.saturating_add(area.height) {
+                if y.saturating_add(1) > area.y.saturating_add(area.height) {
                     y = dialog_area.y.saturating_sub(2);
                 }
                 let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_area.width, 1);

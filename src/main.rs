@@ -89,8 +89,8 @@ async fn main() -> anyhow::Result<()> {
 
     initialize_debug_log(&args)?;
     let mut terminal = ratatui::try_init()?;
-    // Prompt for AWS profile using a minimal input dialog
-    let profile = match profile_input::get_profile(&mut terminal, &mapper) {
+    // Prompt for AWS profile using a minimal input dialog (theme-aware)
+    let profile = match profile_input::get_profile(&mut terminal, &mapper, &ctx.theme) {
         Ok(p) => p,
         Err(e) => {
             // Restore terminal before exiting on cancel/error
