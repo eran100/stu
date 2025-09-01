@@ -12,8 +12,8 @@ mod help;
 mod keys;
 mod macros;
 mod object;
-mod profile_input;
 mod pages;
+mod profile_input;
 mod run;
 mod util;
 mod widget;
@@ -99,7 +99,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let profile_opt = if profile.trim().is_empty() { None } else { Some(profile) };
+    let profile_opt = if profile.trim().is_empty() {
+        None
+    } else {
+        Some(profile)
+    };
 
     let client = client::new(
         args.region,

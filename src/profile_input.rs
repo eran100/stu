@@ -1,7 +1,10 @@
 use anyhow::anyhow;
 use ratatui::{
     backend::Backend,
-    crossterm::event::{self, Event as CEvent, KeyEvent},
+    crossterm::event::{self, Event as CEvent},
+    layout::Rect,
+    style::Style,
+    widgets::Paragraph,
     Terminal,
 };
 
@@ -25,15 +28,41 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
     let theme = ColorTheme::default();
 
     let mut state = InputDialogState::default();
+    let mut error_msg: Option<String> = None;
 
     loop {
         terminal.draw(|f| {
             let area = f.area();
+            let max_width = 50u16;
             let dialog = InputDialog::default()
                 .title("AWS Profile")
-                .max_width(50)
+                .max_width(max_width)
                 .theme(&theme);
+
+            // Render input dialog
             f.render_stateful_widget(dialog, area, &mut state);
+
+            // Render validation error if any
+            if let Some(msg) = &error_msg {
+                // Compute same dialog area as InputDialog for consistent positioning
+                let mut dialog_width = area.width - 4;
+                dialog_width = dialog_width.min(max_width);
+                let dialog_height = 3u16;
+                let dialog_area = centered_dialog_rect(area, dialog_width, dialog_height);
+
+                // Prefer rendering one line below the dialog; otherwise place one line above
+                let mut y = dialog_area
+                    .y
+                    .saturating_add(dialog_height)
+                    .saturating_add(1);
+                if y >= area.y.saturating_add(area.height) {
+                    y = dialog_area.y.saturating_sub(2);
+                }
+                let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_width, 1);
+                let para =
+                    Paragraph::new(msg.clone()).style(Style::default().fg(theme.status_error));
+                f.render_widget(para, msg_area);
+            }
 
             let (x, y) = state.cursor();
             f.set_cursor_position((x, y));
@@ -41,9 +70,35 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
 
         match event::read()? {
             CEvent::Key(key) => {
-                if let Some(result) = handle_input_keys(&mapper, key, &mut state) {
-                    return result;
+                let user_events = mapper.find_events(key);
+
+                // Handle cancel/quit
+                if user_events
+                    .iter()
+                    .any(|e| matches!(e, UserEvent::InputDialogClose | UserEvent::Quit))
+                {
+                    return Err(anyhow!("canceled"));
                 }
+
+                // Handle apply with validation
+                if user_events
+                    .iter()
+                    .any(|e| matches!(e, UserEvent::InputDialogApply))
+                {
+                    let input = state.input().trim().to_string();
+                    if input.is_empty() {
+                        error_msg = Some("Profile cannot be empty".to_string());
+                        continue;
+                    } else {
+                        return Ok(input);
+                    }
+                }
+
+                // Clear error on any other key and pass through to input widget
+                if error_msg.is_some() {
+                    error_msg = None;
+                }
+                state.handle_key_event(key);
             }
             CEvent::Resize(_, _) => {
                 // trigger redraw on next loop iteration
@@ -53,28 +108,21 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
     }
 }
 
-fn handle_input_keys(
-    mapper: &UserEventMapper,
-    key: KeyEvent,
-    state: &mut InputDialogState,
-) -> Option<anyhow::Result<String>> {
-    let user_events = mapper.find_events(key);
+fn centered_dialog_rect(r: Rect, dialog_width: u16, dialog_height: u16) -> Rect {
+    let vertical_pad = r.height.saturating_sub(dialog_height) / 2;
+    let vertical_layout =
+        ratatui::layout::Layout::vertical(ratatui::layout::Constraint::from_lengths([
+            vertical_pad,
+            dialog_height,
+            vertical_pad,
+        ]))
+        .split(r);
 
-    for e in &user_events {
-        match e {
-            UserEvent::InputDialogClose | UserEvent::Quit => {
-                return Some(Err(anyhow!("canceled")));
-            }
-            UserEvent::InputDialogApply => {
-                let input = state.input().trim().to_string();
-                return Some(Ok(input));
-            }
-            _ => {}
-        }
-    }
-
-    // Not handled as a mapped action; treat as text editing input.
-    state.handle_key_event(key);
-    None
+    let horizontal_pad = r.width.saturating_sub(dialog_width) / 2;
+    ratatui::layout::Layout::horizontal(ratatui::layout::Constraint::from_lengths([
+        horizontal_pad,
+        dialog_width,
+        horizontal_pad,
+    ]))
+    .split(vertical_layout[1])[1]
 }
-
