@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use ratatui::{
     backend::Backend,
     crossterm::event::{self, Event as CEvent},
-    layout::Rect,
     style::Style,
     widgets::Paragraph,
     Terminal,
@@ -11,8 +10,10 @@ use ratatui::{
 use crate::{
     color::ColorTheme,
     keys::{UserEvent, UserEventMapper},
-    widget::{InputDialog, InputDialogState},
+    widget::{calc_centered_dialog_rect, InputDialog, InputDialogState},
 };
+
+const PROFILE_EMPTY_ERR: &str = "Profile cannot be empty";
 
 /// Show a minimal input dialog and capture an AWS profile name.
 ///
@@ -48,7 +49,7 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
                 let mut dialog_width = area.width - 4;
                 dialog_width = dialog_width.min(max_width);
                 let dialog_height = 3u16;
-                let dialog_area = centered_dialog_rect(area, dialog_width, dialog_height);
+                let dialog_area = calc_centered_dialog_rect(area, dialog_width, dialog_height);
 
                 // Prefer rendering one line below the dialog; otherwise place one line above
                 let mut y = dialog_area
@@ -60,7 +61,7 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
                 }
                 let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_width, 1);
                 let para =
-                    Paragraph::new(msg.clone()).style(Style::default().fg(theme.status_error));
+                    Paragraph::new(msg.as_str()).style(Style::default().fg(theme.status_error));
                 f.render_widget(para, msg_area);
             }
 
@@ -87,7 +88,7 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
                 {
                     let input = state.input().trim().to_string();
                     if input.is_empty() {
-                        error_msg = Some("Profile cannot be empty".to_string());
+                        error_msg = Some(PROFILE_EMPTY_ERR.to_string());
                         continue;
                     } else {
                         return Ok(input);
@@ -106,23 +107,4 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
             _ => {}
         }
     }
-}
-
-fn centered_dialog_rect(r: Rect, dialog_width: u16, dialog_height: u16) -> Rect {
-    let vertical_pad = r.height.saturating_sub(dialog_height) / 2;
-    let vertical_layout =
-        ratatui::layout::Layout::vertical(ratatui::layout::Constraint::from_lengths([
-            vertical_pad,
-            dialog_height,
-            vertical_pad,
-        ]))
-        .split(r);
-
-    let horizontal_pad = r.width.saturating_sub(dialog_width) / 2;
-    ratatui::layout::Layout::horizontal(ratatui::layout::Constraint::from_lengths([
-        horizontal_pad,
-        dialog_width,
-        horizontal_pad,
-    ]))
-    .split(vertical_layout[1])[1]
 }

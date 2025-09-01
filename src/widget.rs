@@ -16,6 +16,7 @@ mod status;
 mod text_preview;
 
 pub use bar::Bar;
+pub use common::calc_centered_dialog_rect;
 pub use confirm_dialog::{ConfirmDialog, ConfirmDialogState};
 pub use copy_detail_dialog::{CopyDetailDialog, CopyDetailDialogState};
 pub use dialog::Dialog;
