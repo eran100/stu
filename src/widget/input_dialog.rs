@@ -129,6 +129,20 @@ impl StatefulWidget for InputDialog {
     }
 }
 
+impl InputDialog {
+    pub fn dialog_area_for(
+        area: ratatui::layout::Rect,
+        max_width: Option<u16>,
+    ) -> ratatui::layout::Rect {
+        let mut dialog_width = area.width - 4;
+        if let Some(max_width) = max_width {
+            dialog_width = dialog_width.min(max_width);
+        }
+        let dialog_height = 3;
+        calc_centered_dialog_rect(area, dialog_width, dialog_height)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::crossterm::event::KeyCode;

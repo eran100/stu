@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     initialize_debug_log(&args)?;
     let mut terminal = ratatui::try_init()?;
     // Prompt for AWS profile using a minimal input dialog
-    let profile = match profile_input::get_profile(&mut terminal) {
+    let profile = match profile_input::get_profile(&mut terminal, &mapper) {
         Ok(p) => p,
         Err(e) => {
             // Restore terminal before exiting on cancel/error
@@ -99,12 +99,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let profile_opt = Some(profile);
-
     let client = client::new(
         args.region,
         args.endpoint_url,
-        profile_opt,
+        Some(profile),
         ctx.config.default_region.clone(),
         args.path_style.into(),
     )

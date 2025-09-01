@@ -10,7 +10,7 @@ use ratatui::{
 use crate::{
     color::ColorTheme,
     keys::{UserEvent, UserEventMapper},
-    widget::{calc_centered_dialog_rect, InputDialog, InputDialogState},
+    widget::{InputDialog, InputDialogState},
 };
 
 const PROFILE_EMPTY_ERR: &str = "Profile cannot be empty";
@@ -24,8 +24,10 @@ const PROFILE_EMPTY_ERR: &str = "Profile cannot be empty";
 /// Controls (honors configured keybindings):
 /// - Submit: `UserEvent::InputDialogApply` (default: Enter)
 /// - Cancel: `UserEvent::InputDialogClose` (default: Esc) or `UserEvent::Quit` (default: Ctrl-C)
-pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<String> {
-    let mapper = UserEventMapper::load()?;
+pub fn get_profile(
+    terminal: &mut Terminal<impl Backend>,
+    mapper: &UserEventMapper,
+) -> anyhow::Result<String> {
     let theme = ColorTheme::default();
 
     let mut state = InputDialogState::default();
@@ -46,20 +48,17 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
             // Render validation error if any
             if let Some(msg) = &error_msg {
                 // Compute same dialog area as InputDialog for consistent positioning
-                let mut dialog_width = area.width - 4;
-                dialog_width = dialog_width.min(max_width);
-                let dialog_height = 3u16;
-                let dialog_area = calc_centered_dialog_rect(area, dialog_width, dialog_height);
+                let dialog_area = InputDialog::dialog_area_for(area, Some(max_width));
 
                 // Prefer rendering one line below the dialog; otherwise place one line above
                 let mut y = dialog_area
                     .y
-                    .saturating_add(dialog_height)
+                    .saturating_add(dialog_area.height)
                     .saturating_add(1);
                 if y >= area.y.saturating_add(area.height) {
                     y = dialog_area.y.saturating_sub(2);
                 }
-                let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_width, 1);
+                let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_area.width, 1);
                 let para =
                     Paragraph::new(msg.as_str()).style(Style::default().fg(theme.status_error));
                 f.render_widget(para, msg_area);
@@ -73,26 +72,27 @@ pub fn get_profile(terminal: &mut Terminal<impl Backend>) -> anyhow::Result<Stri
             CEvent::Key(key) => {
                 let user_events = mapper.find_events(key);
 
-                // Handle cancel/quit
-                if user_events
-                    .iter()
-                    .any(|e| matches!(e, UserEvent::InputDialogClose | UserEvent::Quit))
-                {
+                let mut apply = false;
+                let mut cancel = false;
+                for e in user_events {
+                    match e {
+                        UserEvent::InputDialogClose | UserEvent::Quit => cancel = true,
+                        UserEvent::InputDialogApply => apply = true,
+                        _ => {}
+                    }
+                }
+
+                if cancel {
                     return Err(anyhow!("canceled"));
                 }
 
-                // Handle apply with validation
-                if user_events
-                    .iter()
-                    .any(|e| matches!(e, UserEvent::InputDialogApply))
-                {
+                if apply {
                     let input = state.input().trim().to_string();
                     if input.is_empty() {
                         error_msg = Some(PROFILE_EMPTY_ERR.to_string());
                         continue;
-                    } else {
-                        return Ok(input);
                     }
+                    return Ok(input);
                 }
 
                 // Clear error on any other key and pass through to input widget
