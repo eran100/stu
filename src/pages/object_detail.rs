@@ -546,7 +546,7 @@ fn build_tabs(tab: &Tab, theme: &ColorTheme) -> Tabs<'static> {
 }
 
 fn build_detail_content_lines(detail: &FileDetail, ui_config: &UiConfig) -> Vec<Line<'static>> {
-    let details = [
+    let mut details: Vec<Vec<Line<'static>>> = [
         ("Name:", &detail.name),
         ("Size:", &format_size_byte(detail.size_byte)),
         (
@@ -570,6 +570,16 @@ fn build_detail_content_lines(detail: &FileDetail, ui_config: &UiConfig) -> Vec<
         }
     })
     .collect();
+
+    if let Some(encoding) = &detail.content_encoding {
+        if !encoding.is_empty() {
+            let lines = vec![
+                Line::from("Content-Encoding:".add_modifier(Modifier::BOLD)),
+                Line::from(format!(" {encoding}")),
+            ];
+            details.push(lines);
+        }
+    }
 
     flatten_with_empty_lines(details)
 }
@@ -1331,6 +1341,7 @@ mod tests {
             last_modified: parse_datetime("2024-01-02 13:01:02"),
             e_tag: "bef684de-a260-48a4-8178-8a535ecccadb".to_string(),
             content_type: "text/plain".to_string(),
+            content_encoding: None,
             storage_class: "STANDARD".to_string(),
             key: "file1".to_string(),
             s3_uri: "s3://bucket-1/file1".to_string(),

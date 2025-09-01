@@ -421,6 +421,7 @@ mod tests {
             last_modified: parse_datetime("2024-01-02 13:01:02"),
             e_tag: "bef684de-a260-48a4-8178-8a535ecccadb".to_string(),
             content_type: "text/plain".to_string(),
+            content_encoding: None,
             storage_class: "STANDARD".to_string(),
             key: "file.txt".to_string(),
             s3_uri: "s3://bucket-1/file.txt".to_string(),
