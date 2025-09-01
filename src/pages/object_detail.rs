@@ -546,7 +546,7 @@ fn build_tabs(tab: &Tab, theme: &ColorTheme) -> Tabs<'static> {
 }
 
 fn build_detail_content_lines(detail: &FileDetail, ui_config: &UiConfig) -> Vec<Line<'static>> {
-    let mut details: Vec<Vec<Line<'static>>> = [
+    let mut details = [
         ("Name:", &detail.name),
         ("Size:", &format_size_byte(detail.size_byte)),
         (
@@ -569,7 +569,7 @@ fn build_detail_content_lines(detail: &FileDetail, ui_config: &UiConfig) -> Vec<
             Some(lines)
         }
     })
-    .collect();
+    .collect::<Vec<Vec<Line<'static>>>>();
 
     if let Some(encoding) = &detail.content_encoding {
         if !encoding.is_empty() {
