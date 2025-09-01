@@ -14,6 +14,7 @@ use crate::{
 };
 
 const PROFILE_EMPTY_ERR: &str = "Profile cannot be empty";
+const DIALOG_MAX_WIDTH: u16 = 50;
 
 /// Show a minimal input dialog and capture an AWS profile name.
 ///
@@ -35,10 +36,9 @@ pub fn get_profile(
     loop {
         terminal.draw(|f| {
             let area = f.area();
-            let max_width = 50u16;
             let dialog = InputDialog::default()
                 .title("AWS Profile")
-                .max_width(max_width)
+                .max_width(DIALOG_MAX_WIDTH)
                 .theme(theme);
 
             // Render input dialog
@@ -47,7 +47,7 @@ pub fn get_profile(
             // Render validation error if any
             if let Some(msg) = &error_msg {
                 // Compute same dialog area as InputDialog for consistent positioning
-                let dialog_area = InputDialog::dialog_area_for(area, Some(max_width));
+                let dialog_area = InputDialog::dialog_area_for(area, Some(DIALOG_MAX_WIDTH));
 
                 // Prefer rendering one line below the dialog; otherwise place one line above
                 let mut y = dialog_area
@@ -71,15 +71,12 @@ pub fn get_profile(
             CEvent::Key(key) => {
                 let user_events = mapper.find_events(key);
 
-                let mut apply = false;
-                let mut cancel = false;
-                for e in user_events {
-                    match e {
-                        UserEvent::InputDialogClose | UserEvent::Quit => cancel = true,
-                        UserEvent::InputDialogApply => apply = true,
-                        _ => {}
-                    }
-                }
+                let apply = user_events
+                    .iter()
+                    .any(|e| matches!(e, UserEvent::InputDialogApply));
+                let cancel = user_events
+                    .iter()
+                    .any(|e| matches!(e, UserEvent::InputDialogClose | UserEvent::Quit));
 
                 if cancel {
                     return Err(anyhow!("canceled"));
