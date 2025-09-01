@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use ratatui::{
     backend::Backend,
     crossterm::event::{self, Event as CEvent},
@@ -29,7 +28,7 @@ pub fn get_profile(
     terminal: &mut Terminal<impl Backend>,
     mapper: &UserEventMapper,
     theme: &ColorTheme,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     let mut state = InputDialogState::default();
     let mut error_msg: Option<String> = None;
 
@@ -54,8 +53,8 @@ pub fn get_profile(
                     .y
                     .saturating_add(dialog_area.height)
                     .saturating_add(1);
-                if y.saturating_add(1) > area.y.saturating_add(area.height) {
-                    y = dialog_area.y.saturating_sub(2);
+                if y.saturating_add(1) > area.bottom() {
+                    y = dialog_area.y.saturating_sub(2).max(area.top());
                 }
                 let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_area.width, 1);
                 let para =
@@ -79,16 +78,16 @@ pub fn get_profile(
                     .any(|e| matches!(e, UserEvent::InputDialogClose | UserEvent::Quit));
 
                 if cancel {
-                    return Err(anyhow!("canceled"));
+                    return Ok(None);
                 }
 
                 if apply {
-                    let input = state.input().trim().to_string();
-                    if input.is_empty() {
+                    let trimmed_input = state.input().trim();
+                    if trimmed_input.is_empty() {
                         error_msg = Some(PROFILE_EMPTY_ERR.to_string());
                         continue;
                     }
-                    return Ok(input);
+                    return Ok(Some(trimmed_input.to_string()));
                 }
 
                 // Clear error on any other key and pass through to input widget

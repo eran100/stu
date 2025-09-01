@@ -91,9 +91,14 @@ async fn main() -> anyhow::Result<()> {
     let mut terminal = ratatui::try_init()?;
     // Prompt for AWS profile using a minimal input dialog (theme-aware)
     let profile = match profile_input::get_profile(&mut terminal, &mapper, &ctx.theme) {
-        Ok(p) => p,
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            // User canceled, exit gracefully
+            ratatui::try_restore()?;
+            return Ok(());
+        }
         Err(e) => {
-            // Restore terminal before exiting on cancel/error
+            // Restore terminal before exiting on error
             ratatui::try_restore()?;
             return Err(e);
         }
