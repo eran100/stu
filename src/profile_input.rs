@@ -54,7 +54,7 @@ pub fn get_profile(
                     .saturating_add(dialog_area.height)
                     .saturating_add(1);
                 if y.saturating_add(1) > area.bottom() {
-                    y = dialog_area.y.saturating_sub(2).max(area.top());
+                    y = dialog_area.y.saturating_sub(1).max(area.top());
                 }
                 let msg_area = ratatui::layout::Rect::new(dialog_area.x, y, dialog_area.width, 1);
                 let para =
@@ -87,7 +87,7 @@ pub fn get_profile(
                         error_msg = Some(PROFILE_EMPTY_ERR.to_string());
                         continue;
                     }
-                    return Ok(Some(trimmed_input.to_string()));
+                    return Ok(Some(trimmed_input.to_owned()));
                 }
 
                 // Clear error on any other key and pass through to input widget
