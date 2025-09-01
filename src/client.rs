@@ -235,6 +235,7 @@ impl Client for AwsSdkClient {
         let last_modified = convert_datetime(output.last_modified().unwrap());
         let e_tag = output.e_tag().unwrap().trim_matches('"').to_string();
         let content_type = output.content_type().unwrap().to_string();
+        let content_encoding = output.content_encoding().map(|s| s.to_string());
         let storage_class = output
             .storage_class()
             .map_or("", |s| s.as_str())
@@ -249,6 +250,7 @@ impl Client for AwsSdkClient {
             last_modified,
             e_tag,
             content_type,
+            content_encoding,
             storage_class,
             key,
             s3_uri,
