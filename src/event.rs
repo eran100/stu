@@ -107,14 +107,9 @@ impl CompletePasteObjectResult {
 #[derive(Debug)]
 pub struct CompleteCreatePrefixResult {
     pub name: String,
+    pub created: bool,
 }
 
-impl CompleteCreatePrefixResult {
-    pub fn new(result: Result<()>, name: String) -> Result<CompleteCreatePrefixResult> {
-        result?;
-        Ok(CompleteCreatePrefixResult { name })
-    }
-}
 
 impl CompleteInitializeResult {
     pub fn new(

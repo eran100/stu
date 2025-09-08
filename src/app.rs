@@ -936,19 +936,47 @@ impl<C: Client> App<C> {
         let client = self.client.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = client.create_prefix(&bucket, &key).await;
-            let result = CompleteCreatePrefixResult::new(result, name);
-            tx.send(AppEventType::CompleteCreatePrefix(result));
+            match client.prefix_exists(&bucket, &key).await {
+                Ok(true) => {
+                    tx.send(AppEventType::NotifyWarn(format!(
+                        "Folder '{}' already exists",
+                        name
+                    )));
+                    tx.send(AppEventType::CompleteCreatePrefix(Ok(
+                        CompleteCreatePrefixResult {
+                            name,
+                            created: false,
+                        },
+                    )));
+                }
+                Ok(false) => {
+                    let result = client.create_prefix(&bucket, &key).await;
+                    let result = match result {
+                        Ok(()) => Ok(CompleteCreatePrefixResult {
+                            name,
+                            created: true,
+                        }),
+                        Err(e) => Err(e),
+                    };
+                    tx.send(AppEventType::CompleteCreatePrefix(result));
+                }
+                Err(e) => {
+                    tx.send(AppEventType::CompleteCreatePrefix(Err(e)));
+                }
+            }
         });
     }
 
     pub fn complete_create_prefix(&mut self, result: Result<CompleteCreatePrefixResult>) {
         match result {
-            Ok(CompleteCreatePrefixResult { name }) => {
-                let msg = format!("Created folder '{}' successfully", name);
-                self.tx.send(AppEventType::NotifySuccess(msg));
-                // Refresh current object list
-                self.tx.send(AppEventType::ObjectListRefresh);
+            Ok(CompleteCreatePrefixResult { name, created }) => {
+                if created {
+                    let msg = format!("Created folder '{}' successfully", name);
+                    self.tx.send(AppEventType::NotifySuccess(msg));
+                    // Refresh current object list
+                    self.tx.send(AppEventType::ObjectListRefresh);
+                }
+                // if not created (already existed), we've already warned; do nothing here
             }
             Err(e) => {
                 self.tx.send(AppEventType::NotifyError(e));
@@ -1186,6 +1214,13 @@ mod tests {
             _key: &str,
         ) -> impl std::future::Future<Output = Result<()>> + Send {
             async { Ok(()) }
+        }
+        fn prefix_exists(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<bool>> + Send {
+            async { Ok(false) }
         }
     }
 

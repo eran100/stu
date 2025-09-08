@@ -61,6 +61,7 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn create_prefix(&self, bucket: &str, key: &str) -> impl Future<Output = Result<()>> + Send;
+    fn prefix_exists(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<bool>> + Send;
 }
 
 pub async fn new(
@@ -502,6 +503,19 @@ impl Client for AwsSdkClient {
         result
             .map(|_| ())
             .map_err(|e| AppError::new("Failed to create prefix", e))
+    }
+
+    async fn prefix_exists(&self, bucket: &str, prefix: &str) -> Result<bool> {
+        let result = self
+            .client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix)
+            .max_keys(1)
+            .send()
+            .await;
+        let output = result.map_err(|e| AppError::new("Failed to check prefix existence", e))?;
+        Ok(!output.contents().is_empty())
     }
 }
 
