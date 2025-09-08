@@ -43,6 +43,7 @@ paste_object = ["p"]
 refresh = ["shift-r"]
 reset_filter = ["esc"]
 management_console = ["x"]
+create_prefix = ["n"]
 
 [object_detail]
 down = ["j"]

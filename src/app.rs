@@ -20,11 +20,11 @@ use crate::{
     environment::Environment,
     error::{AppError, Result},
     event::{
-        AppEventType, CompleteDownloadObjectResult, CompleteDownloadObjectsResult,
-        CompleteInitializeResult, CompleteLoadAllDownloadObjectListResult,
-        CompleteLoadObjectDetailResult, CompleteLoadObjectVersionsResult,
-        CompleteLoadObjectsResult, CompletePreviewObjectResult, CompleteReloadBucketsResult,
-        CompleteReloadObjectsResult, CompleteSaveObjectResult, Sender,
+        AppEventType, CompleteCreatePrefixResult, CompleteDownloadObjectResult,
+        CompleteDownloadObjectsResult, CompleteInitializeResult,
+        CompleteLoadAllDownloadObjectListResult, CompleteLoadObjectDetailResult,
+        CompleteLoadObjectVersionsResult, CompleteLoadObjectsResult, CompletePreviewObjectResult,
+        CompleteReloadBucketsResult, CompleteReloadObjectsResult, CompleteSaveObjectResult, Sender,
     },
     file::{copy_to_clipboard, create_binary_file, save_error_log},
     keys::UserEventMapper,
@@ -920,6 +920,43 @@ impl<C: Client> App<C> {
         });
     }
 
+    pub fn start_create_prefix(&mut self, dir_key: ObjectKey, name: String) {
+        self.tx.send(AppEventType::CreatePrefix(dir_key, name));
+        self.is_loading = true;
+    }
+
+    pub fn create_prefix(&self, dir_key: ObjectKey, name: String) {
+        let bucket = dir_key.bucket_name.clone();
+        let mut key = dir_key.joined_object_path(false);
+        key.push_str(&name);
+        if !key.ends_with('/') {
+            key.push('/');
+        }
+
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = client.create_prefix(&bucket, &key).await;
+            let result = CompleteCreatePrefixResult::new(result, name);
+            tx.send(AppEventType::CompleteCreatePrefix(result));
+        });
+    }
+
+    pub fn complete_create_prefix(&mut self, result: Result<CompleteCreatePrefixResult>) {
+        match result {
+            Ok(CompleteCreatePrefixResult { name }) => {
+                let msg = format!("Created folder '{}' successfully", name);
+                self.tx.send(AppEventType::NotifySuccess(msg));
+                // Refresh current object list
+                self.tx.send(AppEventType::ObjectListRefresh);
+            }
+            Err(e) => {
+                self.tx.send(AppEventType::NotifyError(e));
+            }
+        }
+        self.is_loading = false;
+    }
+
     pub fn complete_paste_object(
         &mut self,
         result: Result<crate::event::CompletePasteObjectResult>,
@@ -1142,6 +1179,13 @@ mod tests {
         }
         fn open_management_console_object(&self, _bucket: &str, _prefix: &str) -> Result<()> {
             Ok(())
+        }
+        fn create_prefix(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
         }
     }
 

@@ -9,6 +9,7 @@ use aws_sdk_s3::{
     config::Region,
     error::SdkError,
     operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output},
+    primitives::ByteStream,
 };
 use chrono::TimeZone;
 use futures::StreamExt;
@@ -59,6 +60,7 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
+    fn create_prefix(&self, bucket: &str, key: &str) -> impl Future<Output = Result<()>> + Send;
 }
 
 pub async fn new(
@@ -485,6 +487,21 @@ impl Client for AwsSdkClient {
             bucket, self.region, prefix
         );
         open::that(path).map_err(AppError::error)
+    }
+
+    async fn create_prefix(&self, bucket: &str, key: &str) -> Result<()> {
+        // Ensure zero-byte object at the desired "folder" key.
+        let result = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(ByteStream::from_static(b""))
+            .send()
+            .await;
+        result
+            .map(|_| ())
+            .map_err(|e| AppError::new("Failed to create prefix", e))
     }
 }
 

@@ -62,6 +62,9 @@ pub enum AppEventType {
     OpenPasteConfirmDialog(PasteSpec),
     PasteObject(PasteSpec),
     CompletePasteObject(Result<CompletePasteObjectResult>),
+    StartCreatePrefix(ObjectKey, String),
+    CreatePrefix(ObjectKey, String),
+    CompleteCreatePrefix(Result<CompleteCreatePrefixResult>),
     BucketListOpenManagementConsole,
     ObjectListOpenManagementConsole(ObjectKey),
     ObjectDetailOpenManagementConsole(ObjectKey),
@@ -98,6 +101,18 @@ impl CompletePasteObjectResult {
     pub fn new(result: Result<()>, name: String) -> Result<CompletePasteObjectResult> {
         result?;
         Ok(CompletePasteObjectResult { name })
+    }
+}
+
+#[derive(Debug)]
+pub struct CompleteCreatePrefixResult {
+    pub name: String,
+}
+
+impl CompleteCreatePrefixResult {
+    pub fn new(result: Result<()>, name: String) -> Result<CompleteCreatePrefixResult> {
+        result?;
+        Ok(CompleteCreatePrefixResult { name })
     }
 }
 

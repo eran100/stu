@@ -55,6 +55,7 @@ enum ViewState {
     FilterDialog,
     SortDialog,
     GoToPathDialog(InputDialogState),
+    NewFolderDialog(InputDialogState),
     CopyDetailDialog(Box<CopyDetailDialogState>),
     DownloadConfirmDialog(Vec<DownloadObjectInfo>, ConfirmDialogState, bool),
     SaveDialog(InputDialogState, Option<Vec<DownloadObjectInfo>>),
@@ -129,6 +130,9 @@ impl ObjectListPage {
                     UserEvent::ObjectListGoToPath => {
                         self.open_go_to_path_dialog();
                     }
+                    UserEvent::ObjectListCreatePrefix => {
+                        self.open_new_folder_dialog();
+                    }
                     UserEvent::ObjectListCopyObject if self.non_empty() => {
                         let object_key = self.current_selected_object_key();
                         let object_item = self.current_selected_item().to_owned();
@@ -171,6 +175,41 @@ impl ObjectListPage {
                         );
                         self.tx.send(AppEventType::GoToPath(object_key));
                         self.view_state = ViewState::Default;
+                    }
+                    UserEvent::Help => {
+                        self.tx.send(AppEventType::OpenHelp);
+                    }
+                    => {
+                        state.handle_key_event(key_event);
+                    }
+                }
+            }
+            ViewState::NewFolderDialog(ref mut state) => {
+                handle_user_events_with_default! { user_events =>
+                    UserEvent::InputDialogClose => {
+                        self.close_new_folder_dialog();
+                    }
+                    UserEvent::InputDialogApply => {
+                        let name = state.input().trim().to_string();
+                        if name.is_empty() {
+                            return;
+                        }
+                        if name.contains('/') {
+                            self.tx.send(AppEventType::NotifyWarn("Folder name cannot contain '/'".into()));
+                            return;
+                        }
+                        // Check for duplicate directory name in current listing
+                        let exists = self.object_items.iter().any(|it| match it {
+                            ObjectItem::Dir { name: dir_name, .. } => dir_name == &name,
+                            _ => false,
+                        });
+                        if exists {
+                            self.tx.send(AppEventType::NotifyWarn(format!("Folder '{}' already exists", name)));
+                            return;
+                        }
+                        let dest_dir = self.current_dir_object_key().clone();
+                        self.tx.send(AppEventType::StartCreatePrefix(dest_dir, name));
+                        self.close_new_folder_dialog();
                     }
                     UserEvent::Help => {
                         self.tx.send(AppEventType::OpenHelp);
@@ -328,6 +367,17 @@ impl ObjectListPage {
             f.set_cursor_position((cursor_x, cursor_y));
         }
 
+        if let ViewState::NewFolderDialog(state) = &mut self.view_state {
+            let dialog = InputDialog::default()
+                .title("New Folder")
+                .max_width(40)
+                .theme(&self.ctx.theme);
+            f.render_stateful_widget(dialog, area, state);
+
+            let (cursor_x, cursor_y) = state.cursor();
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+
         if let ViewState::SortDialog = self.view_state {
             let sort_dialog =
                 ObjectListSortDialog::new(self.sort_dialog_state).theme(&self.ctx.theme);
@@ -384,6 +434,7 @@ impl ObjectListPage {
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObject, "Download object"),
                         BuildHelpsItem::new(UserEvent::ObjectListDownloadObjectAs, "Download object as"),
                         BuildHelpsItem::new(UserEvent::ObjectListSort, "Sort object list"),
+                        BuildHelpsItem::new(UserEvent::ObjectListCreatePrefix, "New folder"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyObject, "Copy selection"),
                         BuildHelpsItem::new(UserEvent::ObjectListPasteObject, "Paste to current dir"),
                         BuildHelpsItem::new(UserEvent::ObjectListCopyDetails, "Open copy dialog"),
@@ -428,6 +479,13 @@ impl ObjectListPage {
                     BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
                     BuildHelpsItem::new(UserEvent::InputDialogClose, "Close filter dialog"),
                     BuildHelpsItem::new(UserEvent::InputDialogApply, "Apply filter"),
+                ]
+            },
+            ViewState::NewFolderDialog(_) => {
+                vec![
+                    BuildHelpsItem::new(UserEvent::Quit, "Quit app"),
+                    BuildHelpsItem::new(UserEvent::InputDialogClose, "Close new folder"),
+                    BuildHelpsItem::new(UserEvent::InputDialogApply, "Create folder"),
                 ]
             },
             ViewState::SortDialog => {
@@ -491,6 +549,7 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCreatePrefix, "New folder", 11),
                         BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
                         BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
                         BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
@@ -506,6 +565,7 @@ impl ObjectListPage {
                         BuildShortHelpsItem::single(UserEvent::ObjectListFilter, "Filter", 4),
                         BuildShortHelpsItem::group(vec![UserEvent::ObjectListDownloadObject, UserEvent::ObjectListDownloadObjectAs], "Download", 5),
                         BuildShortHelpsItem::single(UserEvent::ObjectListSort, "Sort", 6),
+                        BuildShortHelpsItem::single(UserEvent::ObjectListCreatePrefix, "New folder", 11),
                         BuildShortHelpsItem::single(UserEvent::ObjectListCopyObject, "Copy", 7),
                         BuildShortHelpsItem::single(UserEvent::ObjectListPasteObject, "Paste", 9),
                         BuildShortHelpsItem::single(UserEvent::ObjectListRefresh, "Refresh", 10),
@@ -532,6 +592,13 @@ impl ObjectListPage {
                     BuildShortHelpsItem::single(UserEvent::SelectDialogClose, "Close", 2),
                     BuildShortHelpsItem::group(vec![UserEvent::SelectDialogDown, UserEvent::SelectDialogUp], "Select", 3),
                     BuildShortHelpsItem::single(UserEvent::SelectDialogSelect, "Sort", 1),
+                    BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
+                ]
+            },
+            ViewState::NewFolderDialog(_) => {
+                vec![
+                    BuildShortHelpsItem::single(UserEvent::InputDialogClose, "Close", 2),
+                    BuildShortHelpsItem::single(UserEvent::InputDialogApply, "Create", 1),
                     BuildShortHelpsItem::single(UserEvent::Help, "Help", 0),
                 ]
             },
@@ -607,6 +674,14 @@ impl ObjectListPage {
 
     fn open_sort_dialog(&mut self) {
         self.view_state = ViewState::SortDialog;
+    }
+
+    fn open_new_folder_dialog(&mut self) {
+        self.view_state = ViewState::NewFolderDialog(InputDialogState::default());
+    }
+
+    fn close_new_folder_dialog(&mut self) {
+        self.view_state = ViewState::Default;
     }
 
     fn close_sort_dialog(&mut self) {
