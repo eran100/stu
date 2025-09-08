@@ -4,6 +4,7 @@
   - Filter items by name
   - Sort items by name, last modified and size
 - Copy the resource name of the selected object to the clipboard
+- Create a new folder (child prefix) under the current prefix
 - Download object
   - Download a single selected object
   - Recursively download objects in the selected directories

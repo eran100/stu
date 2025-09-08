@@ -12,6 +12,8 @@ The default basic key bindings are as follows:
 
 Detailed operations on each view can be displayed by pressing `?` key.
 
+Note: On the Object List view, press `n` to create a New Folder (child prefix) in the current prefix.
+
 ----
 
 - [Custom Keybindings](./custom-keybindings.md)

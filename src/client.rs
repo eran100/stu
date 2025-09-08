@@ -60,7 +60,9 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
+    /// Create an empty "folder" marker by uploading a zero-byte object at the given key (should end with '/').
     fn create_prefix(&self, bucket: &str, key: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Return true if at least one object exists under the given prefix.
     fn prefix_exists(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<bool>> + Send;
 }
 

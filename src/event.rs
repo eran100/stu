@@ -110,7 +110,6 @@ pub struct CompleteCreatePrefixResult {
     pub created: bool,
 }
 
-
 impl CompleteInitializeResult {
     pub fn new(
         buckets: Result<Vec<BucketItem>>,

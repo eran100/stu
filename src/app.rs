@@ -1120,6 +1120,7 @@ mod tests {
         pages::page::Page,
     };
     use chrono::{DateTime, Local};
+    use tokio::time::{timeout, Duration};
 
     #[derive(Debug)]
     struct FakeClient;
@@ -1299,6 +1300,30 @@ mod tests {
         match rx.recv().await.expect("event") {
             AppEventType::OpenPasteConfirmDialog(spec) => {
                 assert_eq!(spec.dst_key, "dst/dir2/");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_prefix_success_flow_sends_complete() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
+
+        let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        app.create_prefix(dir_key, "foo".to_string());
+
+        // Expect CompleteCreatePrefix event
+        let ev = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev {
+            AppEventType::CompleteCreatePrefix(Ok(res)) => {
+                assert_eq!(res.name, "foo");
+                assert!(res.created);
             }
             other => panic!("unexpected event: {:?}", other),
         }

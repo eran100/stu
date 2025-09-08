@@ -1315,6 +1315,7 @@ fn split_by_display_width(s: &str, max_width: usize) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use crate::set_cells;
+    use tokio::time::{timeout, Duration};
 
     use super::*;
     use chrono::NaiveDateTime;
@@ -1555,6 +1556,79 @@ mod tests {
         terminal.backend().assert_buffer(&expected);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_new_folder_dialog_sends_event() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx = Sender::new(tx_raw);
+        let ctx = Rc::default();
+        let items = vec![];
+        let object_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        let mut page = ObjectListPage::new(items, object_key.clone(), ctx, tx);
+
+        // Open dialog
+        page.handle_key(
+            vec![UserEvent::ObjectListCreatePrefix],
+            KeyEvent::from(KeyCode::Char('n')),
+        );
+        // Type name "foo"
+        for c in [KeyCode::Char('f'), KeyCode::Char('o'), KeyCode::Char('o')] {
+            page.handle_key(vec![], KeyEvent::from(c));
+        }
+        // Apply
+        page.handle_key(
+            vec![UserEvent::InputDialogApply],
+            KeyEvent::from(KeyCode::Enter),
+        );
+
+        let ev = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev {
+            AppEventType::StartCreatePrefix(dir, name) => {
+                assert_eq!(dir, object_key);
+                assert_eq!(name, "foo");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_folder_dialog_warns_on_duplicate() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx = Sender::new(tx_raw);
+        let ctx = Rc::default();
+        let items = vec![object_dir_item("foo")];
+        let object_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        let mut page = ObjectListPage::new(items, object_key, ctx, tx);
+
+        // Open dialog
+        page.handle_key(
+            vec![UserEvent::ObjectListCreatePrefix],
+            KeyEvent::from(KeyCode::Char('n')),
+        );
+        // Type name "foo"
+        for c in [KeyCode::Char('f'), KeyCode::Char('o'), KeyCode::Char('o')] {
+            page.handle_key(vec![], KeyEvent::from(c));
+        }
+        // Apply
+        page.handle_key(
+            vec![UserEvent::InputDialogApply],
+            KeyEvent::from(KeyCode::Enter),
+        );
+
+        let ev = timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev {
+            AppEventType::NotifyWarn(msg) => {
+                assert!(msg.contains("already exists"));
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
     }
 
     #[tokio::test]
