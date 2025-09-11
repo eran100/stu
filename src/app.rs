@@ -1317,4 +1317,141 @@ mod tests {
             other => panic!("unexpected event: {:?}", other),
         }
     }
+
+    #[derive(Debug)]
+    struct FakeClientPrefixExists;
+
+    #[allow(clippy::manual_async_fn)]
+    impl Client for FakeClientPrefixExists {
+        fn region(&self) -> &str {
+            "us-east-1"
+        }
+        fn load_all_buckets(
+            &self,
+        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_bucket(
+            &self,
+            _name: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_objects(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<ObjectItem>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn load_object_detail(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _name: &str,
+        ) -> impl std::future::Future<Output = Result<FileDetail>> + Send {
+            async { Err(AppError::msg("not used in this test: load_object_detail")) }
+        }
+        fn load_object_versions(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<FileVersion>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn download_object<W: std::io::Write + Send, F: Fn(usize) + Send>(
+            &self,
+            _bucket: &str,
+            _key: &str,
+            _version_id: Option<String>,
+            _writer: &mut std::io::BufWriter<W>,
+            _f: F,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn list_all_download_objects(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<Vec<DownloadObjectInfo>>> + Send {
+            async { Ok(vec![]) }
+        }
+        fn copy_object(
+            &self,
+            _src_bucket: &str,
+            _src_key: &str,
+            _dst_bucket: &str,
+            _dst_key: &str,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn copy_prefix<F: Fn(usize, usize) + Send>(
+            &self,
+            _src_bucket: &str,
+            _src_prefix: &str,
+            _dst_bucket: &str,
+            _dst_prefix: &str,
+            _max_concurrent_requests: usize,
+            _f: F,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn open_management_console_buckets(&self) -> Result<()> {
+            Ok(())
+        }
+        fn open_management_console_list(&self, _bucket: &str, _prefix: &str) -> Result<()> {
+            Ok(())
+        }
+        fn open_management_console_object(&self, _bucket: &str, _prefix: &str) -> Result<()> {
+            Ok(())
+        }
+        fn create_prefix(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn prefix_exists(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<bool>> + Send {
+            async { Ok(true) }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_prefix_already_exists_warns_and_complete_false() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let app = App::new(mapper, FakeClientPrefixExists, ctx, Sender::new(tx_raw));
+
+        let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        app.create_prefix(dir_key, "foo".to_string());
+
+        // Expect NotifyWarn first
+        let ev1 = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev1 {
+            AppEventType::NotifyWarn(msg) => assert!(msg.contains("already exists")),
+            other => panic!("unexpected event: {:?}", other),
+        }
+
+        // Then CompleteCreatePrefix with created=false
+        let ev2 = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev2 {
+            AppEventType::CompleteCreatePrefix(Ok(res)) => {
+                assert_eq!(res.name, "foo");
+                assert!(!res.created);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
 }
