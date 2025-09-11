@@ -1111,8 +1111,20 @@ mod tests {
     use chrono::{DateTime, Local};
     use tokio::time::{timeout, Duration};
 
-    #[derive(Debug)]
-    struct FakeClient;
+    #[derive(Debug, Default)]
+    struct FakeClient {
+        prefix_exists_ret: bool,
+    }
+
+    impl FakeClient {
+        fn new() -> Self {
+            Self::default()
+        }
+        fn with_prefix_exists(mut self, value: bool) -> Self {
+            self.prefix_exists_ret = value;
+            self
+        }
+    }
 
     #[allow(clippy::manual_async_fn)]
     impl Client for FakeClient {
@@ -1210,7 +1222,8 @@ mod tests {
             _bucket: &str,
             _prefix: &str,
         ) -> impl std::future::Future<Output = Result<bool>> + Send {
-            async { Ok(false) }
+            let ret = self.prefix_exists_ret;
+            async move { Ok(ret) }
         }
     }
 
@@ -1219,7 +1232,12 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw.clone()));
+        let mut app = App::new(
+            mapper,
+            FakeClient::default(),
+            ctx,
+            Sender::new(tx_raw.clone()),
+        );
 
         // Push two dummy pages to make len > 1 (first push replaces Initializing)
         let dummy_ctx = Rc::new(AppContext::default());
@@ -1250,7 +1268,7 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
+        let mut app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
 
         let base_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
 
@@ -1299,7 +1317,7 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
+        let app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
 
         let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
         app.create_prefix(dir_key, "foo".to_string());
@@ -1318,115 +1336,13 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct FakeClientPrefixExists;
-
-    #[allow(clippy::manual_async_fn)]
-    impl Client for FakeClientPrefixExists {
-        fn region(&self) -> &str {
-            "us-east-1"
-        }
-        fn load_all_buckets(
-            &self,
-        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
-            async { Ok(vec![]) }
-        }
-        fn load_bucket(
-            &self,
-            _name: &str,
-        ) -> impl std::future::Future<Output = Result<Vec<BucketItem>>> + Send {
-            async { Ok(vec![]) }
-        }
-        fn load_objects(
-            &self,
-            _bucket: &str,
-            _prefix: &str,
-        ) -> impl std::future::Future<Output = Result<Vec<ObjectItem>>> + Send {
-            async { Ok(vec![]) }
-        }
-        fn load_object_detail(
-            &self,
-            _bucket: &str,
-            _key: &str,
-            _name: &str,
-        ) -> impl std::future::Future<Output = Result<FileDetail>> + Send {
-            async { Err(AppError::msg("not used in this test: load_object_detail")) }
-        }
-        fn load_object_versions(
-            &self,
-            _bucket: &str,
-            _key: &str,
-        ) -> impl std::future::Future<Output = Result<Vec<FileVersion>>> + Send {
-            async { Ok(vec![]) }
-        }
-        fn download_object<W: std::io::Write + Send, F: Fn(usize) + Send>(
-            &self,
-            _bucket: &str,
-            _key: &str,
-            _version_id: Option<String>,
-            _writer: &mut std::io::BufWriter<W>,
-            _f: F,
-        ) -> impl std::future::Future<Output = Result<()>> + Send {
-            async { Ok(()) }
-        }
-        fn list_all_download_objects(
-            &self,
-            _bucket: &str,
-            _prefix: &str,
-        ) -> impl std::future::Future<Output = Result<Vec<DownloadObjectInfo>>> + Send {
-            async { Ok(vec![]) }
-        }
-        fn copy_object(
-            &self,
-            _src_bucket: &str,
-            _src_key: &str,
-            _dst_bucket: &str,
-            _dst_key: &str,
-        ) -> impl std::future::Future<Output = Result<()>> + Send {
-            async { Ok(()) }
-        }
-        fn copy_prefix<F: Fn(usize, usize) + Send>(
-            &self,
-            _src_bucket: &str,
-            _src_prefix: &str,
-            _dst_bucket: &str,
-            _dst_prefix: &str,
-            _max_concurrent_requests: usize,
-            _f: F,
-        ) -> impl std::future::Future<Output = Result<()>> + Send {
-            async { Ok(()) }
-        }
-        fn open_management_console_buckets(&self) -> Result<()> {
-            Ok(())
-        }
-        fn open_management_console_list(&self, _bucket: &str, _prefix: &str) -> Result<()> {
-            Ok(())
-        }
-        fn open_management_console_object(&self, _bucket: &str, _prefix: &str) -> Result<()> {
-            Ok(())
-        }
-        fn create_prefix(
-            &self,
-            _bucket: &str,
-            _key: &str,
-        ) -> impl std::future::Future<Output = Result<()>> + Send {
-            async { Ok(()) }
-        }
-        fn prefix_exists(
-            &self,
-            _bucket: &str,
-            _prefix: &str,
-        ) -> impl std::future::Future<Output = Result<bool>> + Send {
-            async { Ok(true) }
-        }
-    }
-
     #[tokio::test]
     async fn test_create_prefix_already_exists_warns_and_complete_false() {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let app = App::new(mapper, FakeClientPrefixExists, ctx, Sender::new(tx_raw));
+        let client = FakeClient::new().with_prefix_exists(true);
+        let app = App::new(mapper, client, ctx, Sender::new(tx_raw));
 
         let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
         app.create_prefix(dir_key, "foo".to_string());

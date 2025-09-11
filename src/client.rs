@@ -519,11 +519,12 @@ impl Client for AwsSdkClient {
             .list_objects_v2()
             .bucket(bucket)
             .prefix(&prefix)
+            .delimiter(DELIMITER)
             .max_keys(1)
             .send()
             .await;
         let output = result.map_err(|e| AppError::new("Failed to check prefix existence", e))?;
-        Ok(!output.contents().is_empty())
+        Ok(!output.contents().is_empty() || !output.common_prefixes().is_empty())
     }
 }
 
