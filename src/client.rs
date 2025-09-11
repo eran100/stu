@@ -60,7 +60,9 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
-    /// Create an empty "folder" marker by uploading a zero-byte object at the given key (should end with '/').
+    /// Create an empty "folder" marker by uploading a zero-byte object at the given key.
+    ///
+    /// The `key` should end with '/'. If it does not, a '/' will be appended automatically.
     fn create_prefix(&self, bucket: &str, key: &str) -> impl Future<Output = Result<()>> + Send;
     /// Return true if at least one object exists under the given prefix.
     fn prefix_exists(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<bool>> + Send;
@@ -494,11 +496,13 @@ impl Client for AwsSdkClient {
 
     async fn create_prefix(&self, bucket: &str, key: &str) -> Result<()> {
         // Ensure zero-byte object at the desired "folder" key.
+        // Auto-append trailing slash if missing.
+        let key = normalize_prefix(key);
         let result = self
             .client
             .put_object()
             .bucket(bucket)
-            .key(key)
+            .key(&key)
             .body(ByteStream::from_static(b""))
             .send()
             .await;

@@ -950,14 +950,12 @@ impl<C: Client> App<C> {
                     )));
                 }
                 Ok(false) => {
-                    let result = client.create_prefix(&bucket, &key).await;
-                    let result = match result {
-                        Ok(()) => Ok(CompleteCreatePrefixResult {
+                    let result = client.create_prefix(&bucket, &key).await.map(|()| {
+                        CompleteCreatePrefixResult {
                             name,
                             created: true,
-                        }),
-                        Err(e) => Err(e),
-                    };
+                        }
+                    });
                     tx.send(AppEventType::CompleteCreatePrefix(result));
                 }
                 Err(e) => {

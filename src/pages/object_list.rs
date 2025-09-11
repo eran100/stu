@@ -198,13 +198,12 @@ impl ObjectListPage {
                             self.tx.send(AppEventType::NotifyWarn("Folder name cannot contain '/'".into()));
                             return;
                         }
-                        // Check for duplicate directory name in current listing
-                        let exists = self.object_items.iter().any(|it| match it {
-                            ObjectItem::Dir { name: dir_name, .. } => dir_name == &name,
-                            _ => false,
-                        });
-                        if exists {
-                            self.tx.send(AppEventType::NotifyWarn(format!("Folder '{}' already exists", name)));
+                        // Check for duplicate item name in current listing (file or folder)
+                        if self.object_items.iter().any(|it| it.name() == name) {
+                            self.tx.send(AppEventType::NotifyWarn(format!(
+                                "An item named '{}' already exists",
+                                name
+                            )));
                             return;
                         }
                         let dest_dir = self.current_dir_object_key().clone();
