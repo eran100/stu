@@ -95,7 +95,7 @@ impl<C: Client> App<C> {
         }
 
         let mut parent_path = key.object_path.clone();
-        parent_path.pop(); // Remove last segment
+        parent_path.pop(); // Remove last path component
 
         Some(ObjectKey {
             bucket_name: key.bucket_name.clone(),
@@ -250,11 +250,13 @@ impl<C: Client> App<C> {
         if self.page_stack.len() == 2 {
             if let Page::ObjectList(page) = self.page_stack.current_page() {
                 if let Some(parent) = self.parent_prefix_of(page.current_dir_object_key()) {
-                    // Replace current page with the parent list by loading it
-                    self.page_stack.pop();
-                    self.tx.send(AppEventType::LoadObjects(parent));
-                    self.is_loading = true;
-                    return;
+                    // Only load parent if it isn't cached yet (GoToPath scenario); otherwise pop.
+                    if self.app_objects.get_object_items(&parent).is_none() {
+                        self.page_stack.pop();
+                        self.tx.send(AppEventType::LoadObjects(parent));
+                        self.is_loading = true;
+                        return;
+                    }
                 }
             }
         }

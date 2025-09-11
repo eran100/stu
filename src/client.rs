@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env::var,
     fmt::Debug,
     future::Future,
     io::{BufWriter, Write},
@@ -181,8 +181,8 @@ fn sso_hint(cli_profile: &Option<String>) -> String {
     let active = cli_profile
         .as_ref()
         .cloned()
-        .or_else(|| env::var("AWS_PROFILE").ok())
-        .or_else(|| env::var("AWS_DEFAULT_PROFILE").ok());
+        .or_else(|| var("AWS_PROFILE").ok())
+        .or_else(|| var("AWS_DEFAULT_PROFILE").ok());
 
     match active {
         Some(p) => format!("aws sso login --profile {}", p),
