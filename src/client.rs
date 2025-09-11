@@ -151,8 +151,7 @@ fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
 
 fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
     // Prefer Debug because it often includes nested causes for AWS SDK errors
-    let dbg = format!("{:?}", e);
-    let s = if dbg.len() > 20 { dbg } else { e.to_string() };
+    let s = format!("{:?}", e);
     // Trim to avoid flooding the footer
     if s.len() > 400 {
         s.chars().take(400).collect::<String>() + "..."
@@ -175,6 +174,39 @@ fn sso_hint(cli_profile: &Option<String>) -> String {
     }
 }
 
+impl AwsSdkClient {
+    /// Handle a generic S3 SDK result, enriching SSO-related failures with actionable guidance
+    /// and summarizing the error cause for user-friendly messages.
+fn handle_s3_error<T, E, R>(
+        &self,
+        result: std::result::Result<T, SdkError<E, R>>,
+        context: &str,
+    ) -> crate::error::Result<T>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+        R: std::fmt::Debug + Send + 'static,
+    {
+        match result {
+            Ok(output) => Ok(output),
+            Err(e) => {
+                if is_sso_session_error(&e) {
+                    let msg = format!(
+                        "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
+                        sso_hint(&self.profile)
+                    );
+                    Err(AppError::new(msg, e))
+                } else {
+                    let cause = summarize_error(&e);
+                    Err(AppError::new(
+                        format!("Failed to {}: {}", context, cause),
+                        e,
+                    ))
+                }
+            }
+        }
+    }
+}
+
 impl Client for AwsSdkClient {
     fn region(&self) -> &str {
         &self.region
@@ -182,23 +214,7 @@ impl Client for AwsSdkClient {
 
     async fn load_all_buckets(&self) -> Result<Vec<BucketItem>> {
         let list_buckets_result = self.client.list_buckets().send().await;
-        let list_buckets_output = match list_buckets_result {
-            Ok(o) => o,
-            Err(e) => {
-                if is_sso_session_error(&e) {
-                    let msg = format!(
-                        "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
-                        sso_hint(&self.profile)
-                    );
-                    return Err(AppError::new(msg, e));
-                }
-                let cause = summarize_error(&e);
-                return Err(AppError::new(
-                    format!("Failed to load buckets: {}", cause),
-                    e,
-                ));
-            }
-        };
+        let list_buckets_output = self.handle_s3_error(list_buckets_result, "load buckets")?;
 
         let buckets: Vec<BucketItem> = list_buckets_output
             .buckets()
@@ -260,23 +276,7 @@ impl Client for AwsSdkClient {
                 }
             }
 
-            let output = match result {
-                Ok(o) => o,
-                Err(e) => {
-                    if is_sso_session_error(&e) {
-                        let msg = format!(
-                            "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
-                            sso_hint(&self.profile)
-                        );
-                        return Err(AppError::new(msg, e));
-                    }
-                    let cause = summarize_error(&e);
-                    return Err(AppError::new(
-                        format!("Failed to load objects: {}", cause),
-                        e,
-                    ));
-                }
-            };
+            let output: ListObjectsV2Output = self.handle_s3_error(result, "load objects")?;
 
             let dirs = objects_output_to_dirs(&self.region, bucket, &output);
             dirs_vec.push(dirs);

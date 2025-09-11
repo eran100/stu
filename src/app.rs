@@ -247,23 +247,23 @@ impl<C: Client> App<C> {
         // the Initializing page and a single ObjectList page on top. In that case
         // there is no parent ObjectList page to pop back to, so we actively load
         // the parent prefix instead of jumping back to the bucket list/root.
-        let stack_len = self.page_stack.len();
-        if stack_len >= 1 {
-            // Capture current key (if on ObjectList) without holding a mutable borrow
-            let current_key_opt = match self.page_stack.current_page() {
-                Page::ObjectList(page) => Some(page.current_dir_object_key().clone()),
-                _ => None,
+        // Special-case for GoToPath: when the stack has exactly 2 pages
+        // (initial/bucket-list + current ObjectList), there is no parent page to pop
+        // back to. Load the parent prefix instead to step up one level.
+        if self.page_stack.len() == 2 {
+            let current_key_opt = if let Page::ObjectList(page) = self.page_stack.current_page() {
+                Some(page.current_dir_object_key().clone())
+            } else {
+                None
             };
 
-            if stack_len == 2 {
-                if let Some(curr_key) = current_key_opt {
-                    if let Some(parent) = self.parent_prefix_of(&curr_key) {
-                        // Replace current page with the parent list by loading it
-                        self.page_stack.pop();
-                        self.tx.send(AppEventType::LoadObjects(parent));
-                        self.is_loading = true;
-                        return;
-                    }
+            if let Some(curr_key) = current_key_opt {
+                if let Some(parent) = self.parent_prefix_of(&curr_key) {
+                    // Replace current page with the parent list by loading it
+                    self.page_stack.pop();
+                    self.tx.send(AppEventType::LoadObjects(parent));
+                    self.is_loading = true;
+                    return;
                 }
             }
         }
