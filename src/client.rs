@@ -158,9 +158,7 @@ impl AwsSdkClient {
 /// - "UnauthorizedException"
 /// - "ExpiredToken"
 fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
-    let display_s = e.to_string();
-    let debug_s = format!("{:?}", e);
-    let s = format!("{} {}", display_s, debug_s);
+    let s = format!("{} {:?}", e, e);
     s.contains("Session token not found or invalid")
         || s.contains("invalid_grant")
         || s.contains("UnauthorizedException")
