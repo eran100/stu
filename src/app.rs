@@ -247,18 +247,13 @@ impl<C: Client> App<C> {
         // the Initializing page and a single ObjectList page on top. In that case
         // there is no parent ObjectList page to pop back to, so we actively load
         // the parent prefix instead of jumping back to the bucket list/root.
-        // Special-case for GoToPath: when the stack has exactly 2 pages
-        // (initial/bucket-list + current ObjectList), there is no parent page to pop
-        // back to. Load the parent prefix instead to step up one level.
+        // Special handling for GoToPath: when the page stack has exactly two pages
+        // (the Initializing page and a single ObjectList page), there is no parent
+        // ObjectList page to pop back to. In this case, we actively load the parent
+        // prefix instead of jumping back to the bucket list/root, stepping up one level.
         if self.page_stack.len() == 2 {
-            let current_key_opt = if let Page::ObjectList(page) = self.page_stack.current_page() {
-                Some(page.current_dir_object_key().clone())
-            } else {
-                None
-            };
-
-            if let Some(curr_key) = current_key_opt {
-                if let Some(parent) = self.parent_prefix_of(&curr_key) {
+            if let Page::ObjectList(page) = self.page_stack.current_page() {
+                if let Some(parent) = self.parent_prefix_of(page.current_dir_object_key()) {
                     // Replace current page with the parent list by loading it
                     self.page_stack.pop();
                     self.tx.send(AppEventType::LoadObjects(parent));
