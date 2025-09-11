@@ -935,10 +935,6 @@ impl<C: Client> App<C> {
         tokio::spawn(async move {
             let result: Result<CompleteCreatePrefixResult> = async {
                 if client.prefix_exists(&bucket, &key).await? {
-                    tx.send(AppEventType::NotifyWarn(format!(
-                        "Folder '{}' already exists",
-                        name
-                    )));
                     Ok(CompleteCreatePrefixResult {
                         name,
                         created: false,
@@ -964,8 +960,12 @@ impl<C: Client> App<C> {
                     self.tx.send(AppEventType::NotifySuccess(msg));
                     // Refresh current object list
                     self.tx.send(AppEventType::ObjectListRefresh);
+                } else {
+                    self.tx.send(AppEventType::NotifyWarn(format!(
+                        "Folder '{}' already exists",
+                        name
+                    )));
                 }
-                // if not created (already existed), we've already warned; do nothing here
             }
             Err(e) => {
                 self.tx.send(AppEventType::NotifyError(e));
@@ -1341,32 +1341,40 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let client = FakeClient::new().with_prefix_exists(true);
-        let app = App::new(mapper, client, ctx, Sender::new(tx_raw));
+        let mut app = App::new(
+            mapper,
+            FakeClient::new().with_prefix_exists(true),
+            ctx,
+            Sender::new(tx_raw),
+        );
 
         let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
         app.create_prefix(dir_key, "foo".to_string());
 
-        // Expect NotifyWarn first
+        // First receive the completion event
         let ev1 = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("timeout")
             .expect("event");
-        match ev1 {
-            AppEventType::NotifyWarn(msg) => assert!(msg.contains("already exists")),
+        let res = match ev1 {
+            AppEventType::CompleteCreatePrefix(Ok(res)) => {
+                assert_eq!(res.name, "foo");
+                assert!(!res.created);
+                res
+            }
             other => panic!("unexpected event: {:?}", other),
-        }
+        };
 
-        // Then CompleteCreatePrefix with created=false
+        // Simulate main loop handling to emit the warning
+        app.complete_create_prefix(Ok(res));
+
+        // Then expect the warning notification
         let ev2 = timeout(Duration::from_secs(1), rx.recv())
             .await
             .expect("timeout")
             .expect("event");
         match ev2 {
-            AppEventType::CompleteCreatePrefix(Ok(res)) => {
-                assert_eq!(res.name, "foo");
-                assert!(!res.created);
-            }
+            AppEventType::NotifyWarn(msg) => assert!(msg.contains("already exists")),
             other => panic!("unexpected event: {:?}", other),
         }
     }
