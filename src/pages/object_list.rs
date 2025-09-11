@@ -198,6 +198,12 @@ impl ObjectListPage {
                             self.tx.send(AppEventType::NotifyWarn("Folder name cannot contain '/'".into()));
                             return;
                         }
+                        if name == "." || name == ".." {
+                            self.tx.send(AppEventType::NotifyWarn(
+                                "Folder name cannot be '.' or '..'".into(),
+                            ));
+                            return;
+                        }
                         // Check for duplicate item name in current listing (file or folder)
                         if self.object_items.iter().any(|it| it.name() == name) {
                             self.tx.send(AppEventType::NotifyWarn(format!(
