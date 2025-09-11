@@ -184,6 +184,15 @@ pub async fn run<B: Backend, C: Client>(
             AppEventType::CompletePasteObject(result) => {
                 app.complete_paste_object(result);
             }
+            AppEventType::StartCreatePrefix(dir_key, name) => {
+                app.start_create_prefix(dir_key, name);
+            }
+            AppEventType::CreatePrefix(dir_key, name) => {
+                app.create_prefix(dir_key, name);
+            }
+            AppEventType::CompleteCreatePrefix(result) => {
+                app.complete_create_prefix(result);
+            }
             AppEventType::BackToBucketList => {
                 app.back_to_bucket_list();
             }

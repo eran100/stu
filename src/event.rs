@@ -62,6 +62,9 @@ pub enum AppEventType {
     OpenPasteConfirmDialog(PasteSpec),
     PasteObject(PasteSpec),
     CompletePasteObject(Result<CompletePasteObjectResult>),
+    StartCreatePrefix(ObjectKey, String),
+    CreatePrefix(ObjectKey, String),
+    CompleteCreatePrefix(Result<CompleteCreatePrefixResult>),
     BucketListOpenManagementConsole,
     ObjectListOpenManagementConsole(ObjectKey),
     ObjectDetailOpenManagementConsole(ObjectKey),
@@ -99,6 +102,17 @@ impl CompletePasteObjectResult {
         result?;
         Ok(CompletePasteObjectResult { name })
     }
+}
+
+/// Result of a create-prefix operation.
+///
+/// - `name`: The requested folder name provided by the user.
+/// - `created`: `true` if a zero-byte marker object was created for the child prefix;
+///   `false` when the folder already existed and no creation was performed.
+#[derive(Debug)]
+pub struct CompleteCreatePrefixResult {
+    pub name: String,
+    pub created: bool,
 }
 
 impl CompleteInitializeResult {

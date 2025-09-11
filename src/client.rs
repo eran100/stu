@@ -9,6 +9,7 @@ use aws_sdk_s3::{
     config::Region,
     error::SdkError,
     operation::list_objects_v2::{ListObjectsV2Error, ListObjectsV2Output},
+    primitives::ByteStream,
 };
 use chrono::TimeZone;
 use futures::StreamExt;
@@ -59,6 +60,12 @@ pub trait Client: Send + Sync + 'static + Debug {
     fn open_management_console_buckets(&self) -> Result<()>;
     fn open_management_console_list(&self, bucket: &str, prefix: &str) -> Result<()>;
     fn open_management_console_object(&self, bucket: &str, prefix: &str) -> Result<()>;
+    /// Create an empty "folder" marker by uploading a zero-byte object at the given key.
+    ///
+    /// The `key` should end with '/'. If it does not, a '/' will be appended automatically.
+    fn create_prefix(&self, bucket: &str, key: &str) -> impl Future<Output = Result<()>> + Send;
+    /// Return true if at least one object exists under the given prefix.
+    fn prefix_exists(&self, bucket: &str, prefix: &str) -> impl Future<Output = Result<bool>> + Send;
 }
 
 pub async fn new(
@@ -485,6 +492,39 @@ impl Client for AwsSdkClient {
             bucket, self.region, prefix
         );
         open::that(path).map_err(AppError::error)
+    }
+
+    async fn create_prefix(&self, bucket: &str, key: &str) -> Result<()> {
+        // Ensure zero-byte object at the desired "folder" key.
+        // Auto-append trailing slash if missing.
+        let key = normalize_prefix(key);
+        let result = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(&key)
+            .body(ByteStream::from_static(b""))
+            .send()
+            .await;
+        result
+            .map(|_| ())
+            .map_err(|e| AppError::new("Failed to create prefix", e))
+    }
+
+    async fn prefix_exists(&self, bucket: &str, prefix: &str) -> Result<bool> {
+        // Normalize to ensure we check for the exact folder namespace (avoid matching foobar for foo)
+        let prefix = normalize_prefix(prefix);
+        let result = self
+            .client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(&prefix)
+            .delimiter(DELIMITER)
+            .max_keys(1)
+            .send()
+            .await;
+        let output = result.map_err(|e| AppError::new("Failed to check prefix existence", e))?;
+        Ok(!output.contents().is_empty() || !output.common_prefixes().is_empty())
     }
 }
 

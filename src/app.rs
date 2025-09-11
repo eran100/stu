@@ -20,11 +20,11 @@ use crate::{
     environment::Environment,
     error::{AppError, Result},
     event::{
-        AppEventType, CompleteDownloadObjectResult, CompleteDownloadObjectsResult,
-        CompleteInitializeResult, CompleteLoadAllDownloadObjectListResult,
-        CompleteLoadObjectDetailResult, CompleteLoadObjectVersionsResult,
-        CompleteLoadObjectsResult, CompletePreviewObjectResult, CompleteReloadBucketsResult,
-        CompleteReloadObjectsResult, CompleteSaveObjectResult, Sender,
+        AppEventType, CompleteCreatePrefixResult, CompleteDownloadObjectResult,
+        CompleteDownloadObjectsResult, CompleteInitializeResult,
+        CompleteLoadAllDownloadObjectListResult, CompleteLoadObjectDetailResult,
+        CompleteLoadObjectVersionsResult, CompleteLoadObjectsResult, CompletePreviewObjectResult,
+        CompleteReloadBucketsResult, CompleteReloadObjectsResult, CompleteSaveObjectResult, Sender,
     },
     file::{copy_to_clipboard, create_binary_file, save_error_log},
     keys::UserEventMapper,
@@ -920,6 +920,60 @@ impl<C: Client> App<C> {
         });
     }
 
+    pub fn start_create_prefix(&mut self, dir_key: ObjectKey, name: String) {
+        self.tx.send(AppEventType::CreatePrefix(dir_key, name));
+        self.is_loading = true;
+    }
+
+    pub fn create_prefix(&self, dir_key: ObjectKey, name: String) {
+        let bucket = dir_key.bucket_name.clone();
+        let mut key = dir_key.joined_object_path(false);
+        key.push_str(&name);
+
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result: Result<CompleteCreatePrefixResult> = async {
+                if client.prefix_exists(&bucket, &key).await? {
+                    Ok(CompleteCreatePrefixResult {
+                        name,
+                        created: false,
+                    })
+                } else {
+                    client.create_prefix(&bucket, &key).await?;
+                    Ok(CompleteCreatePrefixResult {
+                        name,
+                        created: true,
+                    })
+                }
+            }
+            .await;
+            tx.send(AppEventType::CompleteCreatePrefix(result));
+        });
+    }
+
+    pub fn complete_create_prefix(&mut self, result: Result<CompleteCreatePrefixResult>) {
+        match result {
+            Ok(CompleteCreatePrefixResult { name, created }) => {
+                if created {
+                    let msg = format!("Created folder '{}' successfully", name);
+                    self.tx.send(AppEventType::NotifySuccess(msg));
+                    // Refresh current object list
+                    self.tx.send(AppEventType::ObjectListRefresh);
+                } else {
+                    self.tx.send(AppEventType::NotifyWarn(format!(
+                        "Folder '{}' already exists",
+                        name
+                    )));
+                }
+            }
+            Err(e) => {
+                self.tx.send(AppEventType::NotifyError(e));
+            }
+        }
+        self.is_loading = false;
+    }
+
     pub fn complete_paste_object(
         &mut self,
         result: Result<crate::event::CompletePasteObjectResult>,
@@ -1055,9 +1109,22 @@ mod tests {
         pages::page::Page,
     };
     use chrono::{DateTime, Local};
+    use tokio::time::{timeout, Duration};
 
-    #[derive(Debug)]
-    struct FakeClient;
+    #[derive(Debug, Default)]
+    struct FakeClient {
+        prefix_exists_ret: bool,
+    }
+
+    impl FakeClient {
+        fn new() -> Self {
+            Self::default()
+        }
+        fn with_prefix_exists(mut self, value: bool) -> Self {
+            self.prefix_exists_ret = value;
+            self
+        }
+    }
 
     #[allow(clippy::manual_async_fn)]
     impl Client for FakeClient {
@@ -1143,6 +1210,21 @@ mod tests {
         fn open_management_console_object(&self, _bucket: &str, _prefix: &str) -> Result<()> {
             Ok(())
         }
+        fn create_prefix(
+            &self,
+            _bucket: &str,
+            _key: &str,
+        ) -> impl std::future::Future<Output = Result<()>> + Send {
+            async { Ok(()) }
+        }
+        fn prefix_exists(
+            &self,
+            _bucket: &str,
+            _prefix: &str,
+        ) -> impl std::future::Future<Output = Result<bool>> + Send {
+            let ret = self.prefix_exists_ret;
+            async move { Ok(ret) }
+        }
     }
 
     #[tokio::test]
@@ -1150,7 +1232,12 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw.clone()));
+        let mut app = App::new(
+            mapper,
+            FakeClient::default(),
+            ctx,
+            Sender::new(tx_raw.clone()),
+        );
 
         // Push two dummy pages to make len > 1 (first push replaces Initializing)
         let dummy_ctx = Rc::new(AppContext::default());
@@ -1181,7 +1268,7 @@ mod tests {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mapper = UserEventMapper::default();
         let ctx = AppContext::default();
-        let mut app = App::new(mapper, FakeClient, ctx, Sender::new(tx_raw));
+        let mut app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
 
         let base_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
 
@@ -1221,6 +1308,73 @@ mod tests {
             AppEventType::OpenPasteConfirmDialog(spec) => {
                 assert_eq!(spec.dst_key, "dst/dir2/");
             }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_prefix_success_flow_sends_complete() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
+
+        let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        app.create_prefix(dir_key, "foo".to_string());
+
+        // Expect CompleteCreatePrefix event
+        let ev = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev {
+            AppEventType::CompleteCreatePrefix(Ok(res)) => {
+                assert_eq!(res.name, "foo");
+                assert!(res.created);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_prefix_already_exists_warns_and_complete_false() {
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let mut app = App::new(
+            mapper,
+            FakeClient::new().with_prefix_exists(true),
+            ctx,
+            Sender::new(tx_raw),
+        );
+
+        let dir_key = ObjectKey::with_prefix("bucket", "dir1/".to_string());
+        app.create_prefix(dir_key, "foo".to_string());
+
+        // First receive the completion event
+        let ev1 = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        let res = match ev1 {
+            AppEventType::CompleteCreatePrefix(Ok(res)) => {
+                assert_eq!(res.name, "foo");
+                assert!(!res.created);
+                res
+            }
+            other => panic!("unexpected event: {:?}", other),
+        };
+
+        // Simulate main loop handling to emit the warning
+        app.complete_create_prefix(Ok(res));
+
+        // Then expect the warning notification
+        let ev2 = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev2 {
+            AppEventType::NotifyWarn(msg) => assert!(msg.contains("already exists")),
             other => panic!("unexpected event: {:?}", other),
         }
     }
