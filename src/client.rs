@@ -512,11 +512,13 @@ impl Client for AwsSdkClient {
     }
 
     async fn prefix_exists(&self, bucket: &str, prefix: &str) -> Result<bool> {
+        // Normalize to ensure we check for the exact folder namespace (avoid matching foobar for foo)
+        let prefix = normalize_prefix(prefix);
         let result = self
             .client
             .list_objects_v2()
             .bucket(bucket)
-            .prefix(prefix)
+            .prefix(&prefix)
             .max_keys(1)
             .send()
             .await;

@@ -929,39 +929,30 @@ impl<C: Client> App<C> {
         let bucket = dir_key.bucket_name.clone();
         let mut key = dir_key.joined_object_path(false);
         key.push_str(&name);
-        if !key.ends_with('/') {
-            key.push('/');
-        }
 
         let client = self.client.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            match client.prefix_exists(&bucket, &key).await {
-                Ok(true) => {
+            let result: Result<CompleteCreatePrefixResult> = async {
+                if client.prefix_exists(&bucket, &key).await? {
                     tx.send(AppEventType::NotifyWarn(format!(
                         "Folder '{}' already exists",
                         name
                     )));
-                    tx.send(AppEventType::CompleteCreatePrefix(Ok(
-                        CompleteCreatePrefixResult {
-                            name,
-                            created: false,
-                        },
-                    )));
-                }
-                Ok(false) => {
-                    let result = client.create_prefix(&bucket, &key).await.map(|()| {
-                        CompleteCreatePrefixResult {
-                            name,
-                            created: true,
-                        }
-                    });
-                    tx.send(AppEventType::CompleteCreatePrefix(result));
-                }
-                Err(e) => {
-                    tx.send(AppEventType::CompleteCreatePrefix(Err(e)));
+                    Ok(CompleteCreatePrefixResult {
+                        name,
+                        created: false,
+                    })
+                } else {
+                    client.create_prefix(&bucket, &key).await?;
+                    Ok(CompleteCreatePrefixResult {
+                        name,
+                        created: true,
+                    })
                 }
             }
+            .await;
+            tx.send(AppEventType::CompleteCreatePrefix(result));
         });
     }
 
