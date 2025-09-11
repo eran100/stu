@@ -1,6 +1,8 @@
 /target
 /out
 
-error.log
+# Logs
+*.log
+
 .DS_Store
 repo.txt

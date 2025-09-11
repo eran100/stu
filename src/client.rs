@@ -1,4 +1,5 @@
 use std::{
+    env,
     fmt::Debug,
     future::Future,
     io::{BufWriter, Write},
@@ -88,6 +89,7 @@ pub async fn new(
 struct AwsSdkClient {
     client: aws_sdk_s3::Client,
     region: String,
+    profile: Option<String>,
 }
 
 impl Debug for AwsSdkClient {
@@ -129,7 +131,47 @@ impl AwsSdkClient {
         let client = aws_sdk_s3::Client::from_conf(config);
         let region = sdk_config.region().unwrap().to_string();
 
-        AwsSdkClient { client, region }
+        AwsSdkClient {
+            client,
+            region,
+            profile,
+        }
+    }
+}
+
+fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
+    let display_s = e.to_string();
+    let debug_s = format!("{:?}", e);
+    let s = format!("{} {}", display_s, debug_s);
+    s.contains("Session token not found or invalid")
+        || s.contains("invalid_grant")
+        || s.contains("UnauthorizedException")
+        || s.contains("ExpiredToken")
+}
+
+fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
+    // Prefer Debug because it often includes nested causes for AWS SDK errors
+    let dbg = format!("{:?}", e);
+    let s = if dbg.len() > 20 { dbg } else { e.to_string() };
+    // Trim to avoid flooding the footer
+    if s.len() > 400 {
+        s.chars().take(400).collect::<String>() + "..."
+    } else {
+        s
+    }
+}
+
+fn sso_hint(cli_profile: &Option<String>) -> String {
+    // Prefer explicit CLI flag, then environment variables
+    let active = cli_profile
+        .as_ref()
+        .cloned()
+        .or_else(|| env::var("AWS_PROFILE").ok())
+        .or_else(|| env::var("AWS_DEFAULT_PROFILE").ok());
+
+    match active {
+        Some(p) => format!("aws sso login --profile {}", p),
+        None => "aws sso login".to_string(),
     }
 }
 
@@ -140,8 +182,23 @@ impl Client for AwsSdkClient {
 
     async fn load_all_buckets(&self) -> Result<Vec<BucketItem>> {
         let list_buckets_result = self.client.list_buckets().send().await;
-        let list_buckets_output =
-            list_buckets_result.map_err(|e| AppError::new("Failed to load buckets", e))?;
+        let list_buckets_output = match list_buckets_result {
+            Ok(o) => o,
+            Err(e) => {
+                if is_sso_session_error(&e) {
+                    let msg = format!(
+                        "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
+                        sso_hint(&self.profile)
+                    );
+                    return Err(AppError::new(msg, e));
+                }
+                let cause = summarize_error(&e);
+                return Err(AppError::new(
+                    format!("Failed to load buckets: {}", cause),
+                    e,
+                ));
+            }
+        };
 
         let buckets: Vec<BucketItem> = list_buckets_output
             .buckets()
@@ -203,7 +260,23 @@ impl Client for AwsSdkClient {
                 }
             }
 
-            let output = result.map_err(|e| AppError::new("Failed to load objects", e))?;
+            let output = match result {
+                Ok(o) => o,
+                Err(e) => {
+                    if is_sso_session_error(&e) {
+                        let msg = format!(
+                            "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
+                            sso_hint(&self.profile)
+                        );
+                        return Err(AppError::new(msg, e));
+                    }
+                    let cause = summarize_error(&e);
+                    return Err(AppError::new(
+                        format!("Failed to load objects: {}", cause),
+                        e,
+                    ));
+                }
+            };
 
             let dirs = objects_output_to_dirs(&self.region, bucket, &output);
             dirs_vec.push(dirs);
