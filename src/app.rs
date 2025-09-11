@@ -86,6 +86,23 @@ impl<C: Client> App<C> {
         }
     }
 
+    /// Compute the parent prefix of an ObjectKey by removing the last path segment.
+    /// Returns None if already at bucket root.
+    fn parent_prefix_of(&self, key: &ObjectKey) -> Option<ObjectKey> {
+        if key.object_path.is_empty() {
+            // Already at bucket root
+            return None;
+        }
+
+        let mut parent_path = key.object_path.clone();
+        parent_path.pop(); // Remove last segment
+
+        Some(ObjectKey {
+            bucket_name: key.bucket_name.clone(),
+            object_path: parent_path,
+        })
+    }
+
     pub fn initialize(&mut self, bucket: Option<String>, prefix: Option<String>) {
         let client = self.client.clone();
         let tx = self.tx.clone();
@@ -226,6 +243,31 @@ impl<C: Client> App<C> {
     }
 
     pub fn object_list_move_up(&mut self) {
+        // Special handling for when we arrived via GoToPath: page stack only has
+        // the Initializing page and a single ObjectList page on top. In that case
+        // there is no parent ObjectList page to pop back to, so we actively load
+        // the parent prefix instead of jumping back to the bucket list/root.
+        let stack_len = self.page_stack.len();
+        if stack_len >= 1 {
+            // Capture current key (if on ObjectList) without holding a mutable borrow
+            let current_key_opt = match self.page_stack.current_page() {
+                Page::ObjectList(page) => Some(page.current_dir_object_key().clone()),
+                _ => None,
+            };
+
+            if stack_len == 2 {
+                if let Some(curr_key) = current_key_opt {
+                    if let Some(parent) = self.parent_prefix_of(&curr_key) {
+                        // Replace current page with the parent list by loading it
+                        self.page_stack.pop();
+                        self.tx.send(AppEventType::LoadObjects(parent));
+                        self.is_loading = true;
+                        return;
+                    }
+                }
+            }
+        }
+
         if self.page_stack.len() == 1 && self.app_objects.get_bucket_items().len() == 1 {
             return;
         }
@@ -1377,5 +1419,105 @@ mod tests {
             AppEventType::NotifyWarn(msg) => assert!(msg.contains("already exists")),
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_backspace_from_goto_loads_parent_one_level() {
+        use crate::event::AppEventType;
+        use tokio::time::{timeout, Duration};
+
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let mut app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
+
+        // Simulate that we are in a multi-bucket scenario and have a bucket list page at the bottom
+        let bucket_list_page = Page::of_bucket_list(
+            vec![],
+            Rc::new(AppContext::default()),
+            Sender::new(tokio::sync::mpsc::unbounded_channel().0),
+        );
+        app.page_stack.push(bucket_list_page);
+
+        // Simulate that we have a single ObjectList page after a GoToPath load
+        let deep_key = ObjectKey::with_prefix("b", "dev/games/slot/BookOfRebirth/".to_string());
+        let res = CompleteLoadObjectsResult {
+            items: vec![],
+            object_key: deep_key.clone(),
+        };
+        app.complete_load_objects(Ok(res));
+        assert_eq!(
+            app.page_stack.len(),
+            2,
+            "should have BucketList + ObjectList"
+        );
+
+        // Act: backspace behavior should load parent instead of jumping to bucket root
+        app.object_list_move_up();
+
+        // Assert: we popped the page and requested to LoadObjects with parent prefix
+        assert_eq!(
+            app.page_stack.len(),
+            1,
+            "top page popped before loading parent"
+        );
+
+        let ev = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("event");
+        match ev {
+            AppEventType::LoadObjects(parent) => {
+                assert_eq!(parent.bucket_name, "b");
+                assert_eq!(parent.joined_object_path(false), "dev/games/slot/");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+        assert!(
+            app.is_loading,
+            "should be in loading state while fetching parent"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_backspace_with_parent_page_pops_without_loading() {
+        use tokio::time::{timeout, Duration};
+
+        let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mapper = UserEventMapper::default();
+        let ctx = AppContext::default();
+        let mut app = App::new(mapper, FakeClient::default(), ctx, Sender::new(tx_raw));
+
+        // Simulate multi-bucket scenario by ensuring BucketList at bottom
+        let bucket_list_page = Page::of_bucket_list(
+            vec![],
+            Rc::new(AppContext::default()),
+            Sender::new(tokio::sync::mpsc::unbounded_channel().0),
+        );
+        app.page_stack.push(bucket_list_page);
+
+        // Simulate stacked navigation: parent -> child
+        let parent_key = ObjectKey::with_prefix("b", "dev/games/slot/".to_string());
+        let child_key = ObjectKey::with_prefix("b", "dev/games/slot/BookOfRebirth/".to_string());
+
+        app.complete_load_objects(Ok(CompleteLoadObjectsResult {
+            items: vec![],
+            object_key: parent_key,
+        }));
+        app.complete_load_objects(Ok(CompleteLoadObjectsResult {
+            items: vec![],
+            object_key: child_key,
+        }));
+
+        assert_eq!(app.page_stack.len(), 3, "BucketList + parent + child");
+
+        // Act: backspace should simply pop the top page (child) and not send LoadObjects
+        app.object_list_move_up();
+
+        assert_eq!(app.page_stack.len(), 2, "one page popped");
+
+        // Ensure no event was sent (timeout should occur)
+        let res = timeout(Duration::from_millis(200), rx.recv()).await;
+        assert!(res.is_err(), "no event should be sent for simple pop");
     }
 }
