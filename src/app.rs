@@ -246,7 +246,6 @@ impl<C: Client> App<C> {
         // Special handling for when we arrived via GoToPath: page stack only has
         // the Initializing page and a single ObjectList page on top. In that case
         // there is no parent ObjectList page to pop back to, so we actively load
-        // the parent prefix instead of jumping back to the bucket list/root.
         // Special handling for GoToPath: when the page stack has exactly two pages
         // (the Initializing page and a single ObjectList page), there is no parent
         // ObjectList page to pop back to. In this case, we actively load the parent

@@ -22,6 +22,9 @@ use crate::{
 
 const DELIMITER: &str = "/";
 
+// Max characters to display when summarizing errors for the footer/notifications
+const MAX_ERROR_SUMMARY_LEN: usize = 400;
+
 pub enum AddressingStyle {
     Auto,
     Path,          // https://s3.region.amazonaws.com/bucket/key
@@ -142,20 +145,18 @@ impl AwsSdkClient {
     }
 }
 
-/**
-Detects common AWS SSO session failures from SDK errors.
-
-We currently rely on Display/Debug string matching because SSO-related errors
-are wrapped in layered `SdkError` types that vary by operation. Centralizing
-this heuristic detection here lets us switch to structured error/code matching
-in one place later.
-
-Matches:
-- "Session token not found or invalid" (UnauthorizedException)
-- "invalid_grant" (InvalidGrantException)
-- "UnauthorizedException"
-- "ExpiredToken"
-*/
+/// Detects common AWS SSO session failures from SDK errors.
+///
+/// We currently rely on Display/Debug string matching because SSO-related errors
+/// are wrapped in layered `SdkError` types that vary by operation. Centralizing
+/// this heuristic detection here lets us switch to structured error/code matching
+/// in one place later.
+///
+/// Matches:
+/// - "Session token not found or invalid" (UnauthorizedException)
+/// - "invalid_grant" (InvalidGrantException)
+/// - "UnauthorizedException"
+/// - "ExpiredToken"
 fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
     let display_s = e.to_string();
     let debug_s = format!("{:?}", e);
@@ -170,8 +171,8 @@ fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
     // Prefer Debug because it often includes nested causes for AWS SDK errors
     let s = format!("{:?}", e);
     // Trim to avoid flooding the footer
-    if s.len() > 400 {
-        s.chars().take(400).collect::<String>() + "..."
+    if s.len() > MAX_ERROR_SUMMARY_LEN {
+        s.chars().take(MAX_ERROR_SUMMARY_LEN).collect::<String>() + "..."
     } else {
         s
     }
@@ -243,6 +244,9 @@ impl Client for AwsSdkClient {
     }
 
     async fn load_all_buckets(&self) -> Result<Vec<BucketItem>> {
+        // S3 ListBuckets is a global operation; forcing a specific region here can
+        // cause failures with some endpoints. Rely on SDK defaults and filter
+        // client-side if needed.
         let list_buckets_result = self.client.list_buckets().send().await;
         let list_buckets_output = self.handle_s3_error(list_buckets_result, "load buckets")?;
 
