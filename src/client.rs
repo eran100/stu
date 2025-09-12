@@ -1,4 +1,5 @@
 use std::{
+    env::var,
     fmt::Debug,
     future::Future,
     io::{BufWriter, Write},
@@ -20,6 +21,9 @@ use crate::{
 };
 
 const DELIMITER: &str = "/";
+
+// Max characters to display when summarizing errors for the footer/notifications
+const MAX_ERROR_SUMMARY_LEN: usize = 400;
 
 pub enum AddressingStyle {
     Auto,
@@ -88,6 +92,10 @@ pub async fn new(
 struct AwsSdkClient {
     client: aws_sdk_s3::Client,
     region: String,
+    /// AWS profile name used for authentication (including SSO). Used to surface
+    /// actionable guidance when auth fails (e.g., `aws sso login --profile <name>`)
+    /// and to aid troubleshooting for SSO-related issues.
+    profile: Option<String>,
 }
 
 impl Debug for AwsSdkClient {
@@ -129,7 +137,110 @@ impl AwsSdkClient {
         let client = aws_sdk_s3::Client::from_conf(config);
         let region = sdk_config.region().unwrap().to_string();
 
-        AwsSdkClient { client, region }
+        AwsSdkClient {
+            client,
+            region,
+            profile,
+        }
+    }
+}
+
+/// Detects common AWS SSO session failures from SDK errors.
+///
+/// We currently rely on Display/Debug string matching because SSO-related errors
+/// are wrapped in layered `SdkError` types that vary by operation. Centralizing
+/// this heuristic detection here lets us switch to structured error/code matching
+/// in one place later.
+///
+/// Matches:
+/// - "Session token not found or invalid" (UnauthorizedException)
+/// - "invalid_grant" (InvalidGrantException)
+/// - "UnauthorizedException"
+/// - "ExpiredToken"
+fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
+    // Prefer Debug; it typically includes nested causes for AWS SDK errors.
+    let s = format!("{:?}", e);
+    s.contains("Session token not found or invalid")
+        || s.contains("invalid_grant")
+        || s.contains("UnauthorizedException")
+        || s.contains("ExpiredToken")
+}
+
+fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
+    // Prefer Debug because it often includes nested causes for AWS SDK errors
+    let s = format!("{:?}", e);
+    // Trim to avoid flooding the footer
+    if s.len() > MAX_ERROR_SUMMARY_LEN {
+        // Efficiently truncate by UTF-8 character boundary without scanning the entire string by chars.
+        // We cap by byte length and back up to the nearest char boundary.
+        let mut end = s.len().min(MAX_ERROR_SUMMARY_LEN);
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s[..end].to_string() + "..."
+    } else {
+        s
+    }
+}
+
+fn sso_hint(cli_profile: &Option<String>) -> String {
+    // Prefer explicit CLI flag, then environment variables.
+    // Avoid cloning when CLI profile is present by borrowing as &str.
+    if let Some(p) = cli_profile.as_deref() {
+        return format!("aws sso login --profile {}", p);
+    }
+    if let Ok(p) = var("AWS_PROFILE") {
+        return format!("aws sso login --profile {}", p);
+    }
+    if let Ok(p) = var("AWS_DEFAULT_PROFILE") {
+        return format!("aws sso login --profile {}", p);
+    }
+    "aws sso login".to_string()
+}
+
+impl AwsSdkClient {
+    /// Handles a generic S3 SDK result, enriching SSO-related failures with actionable guidance
+    /// and summarizing the error cause for user-friendly messages.
+    ///
+    /// Parameters
+    /// - `result`: The result returned by an S3 SDK operation.
+    /// - `context`: A short description of the operation (e.g., "load objects").
+    ///
+    /// Type Parameters
+    /// - `T`: Success type of the SDK operation.
+    /// - `E`: Error type of the SDK operation.
+    /// - `R`: Raw response type carried by SdkError.
+    ///
+    /// Returns
+    /// - Ok(T) on success.
+    /// - Err(AppError) with SSO guidance when relevant, or a summarized cause otherwise.
+    fn handle_s3_error<T, E, R>(
+        &self,
+        result: std::result::Result<T, SdkError<E, R>>,
+        context: &str,
+    ) -> crate::error::Result<T>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+        R: std::fmt::Debug + Send + 'static,
+    {
+        match result {
+            Ok(output) => Ok(output),
+            Err(e) => {
+                if is_sso_session_error(&e) {
+                    let msg = format!(
+                        "Authentication required: your AWS SSO session is expired or invalid. Please run `{}` and retry.",
+                        sso_hint(&self.profile)
+                    );
+                    Err(AppError::new(msg, e))
+                } else {
+                    let cause = summarize_error(&e);
+                    Err(AppError::new(
+                        format!("Failed to {}: {}", context, cause),
+                        e,
+                    ))
+                }
+            }
+        }
     }
 }
 
@@ -139,14 +250,11 @@ impl Client for AwsSdkClient {
     }
 
     async fn load_all_buckets(&self) -> Result<Vec<BucketItem>> {
-        let list_buckets_result = self
-            .client
-            .list_buckets()
-            .bucket_region(&self.region)
-            .send()
-            .await;
-        let list_buckets_output =
-            list_buckets_result.map_err(|e| AppError::new("Failed to load buckets", e))?;
+        // S3 ListBuckets is a global operation; forcing a specific region here can
+        // cause failures with some endpoints. Rely on SDK defaults.
+        // Note: Client-side filtering is not currently implemented; add filtering here if needed in the future.
+        let list_buckets_result = self.client.list_buckets().send().await;
+        let list_buckets_output = self.handle_s3_error(list_buckets_result, "load buckets")?;
 
         let buckets: Vec<BucketItem> = list_buckets_output
             .buckets()
@@ -208,7 +316,7 @@ impl Client for AwsSdkClient {
                 }
             }
 
-            let output = result.map_err(|e| AppError::new("Failed to load objects", e))?;
+            let output: ListObjectsV2Output = self.handle_s3_error(result, "load objects")?;
 
             let dirs = objects_output_to_dirs(&self.region, bucket, &output);
             dirs_vec.push(dirs);
@@ -235,7 +343,7 @@ impl Client for AwsSdkClient {
             .key(key)
             .send()
             .await;
-        let output = result.map_err(|e| AppError::new("Failed to load object detail", e))?;
+        let output = self.handle_s3_error(result, "load object detail")?;
 
         let name = name.to_owned();
         let size_byte = output.content_length().unwrap() as usize;
@@ -274,7 +382,7 @@ impl Client for AwsSdkClient {
             .prefix(key)
             .send()
             .await;
-        let output = result.map_err(|e| AppError::new("Failed to load object versions", e))?;
+        let output = self.handle_s3_error(result, "load object versions")?;
 
         let versions = output
             .versions()
@@ -311,7 +419,7 @@ impl Client for AwsSdkClient {
         }
 
         let result = request.send().await;
-        let output = result.map_err(|e| AppError::new("Failed to download object", e))?;
+        let output = self.handle_s3_error(result, "download object")?;
 
         let mut stream = output.body;
         let mut i = 0;
@@ -354,7 +462,7 @@ impl Client for AwsSdkClient {
                 .set_continuation_token(token)
                 .send()
                 .await;
-            let output = result.map_err(|e| AppError::new("Failed to list download objects", e))?;
+            let output = self.handle_s3_error(result, "list download objects")?;
 
             let os = output
                 .contents()
@@ -395,9 +503,9 @@ impl Client for AwsSdkClient {
             .send()
             .await;
 
-        result
-            .map(|_| ())
-            .map_err(|e| AppError::new("Failed to copy object", e))
+        let _: aws_sdk_s3::operation::copy_object::CopyObjectOutput =
+            self.handle_s3_error(result, "copy object")?;
+        Ok(())
     }
 
     async fn copy_prefix<F: Fn(usize, usize) + Send>(
@@ -506,9 +614,9 @@ impl Client for AwsSdkClient {
             .body(ByteStream::from_static(b""))
             .send()
             .await;
-        result
-            .map(|_| ())
-            .map_err(|e| AppError::new("Failed to create prefix", e))
+        let _: aws_sdk_s3::operation::put_object::PutObjectOutput =
+            self.handle_s3_error(result, "create prefix")?;
+        Ok(())
     }
 
     async fn prefix_exists(&self, bucket: &str, prefix: &str) -> Result<bool> {
@@ -523,7 +631,7 @@ impl Client for AwsSdkClient {
             .max_keys(1)
             .send()
             .await;
-        let output = result.map_err(|e| AppError::new("Failed to check prefix existence", e))?;
+        let output = self.handle_s3_error(result, "check prefix existence")?;
         Ok(!output.contents().is_empty() || !output.common_prefixes().is_empty())
     }
 }
