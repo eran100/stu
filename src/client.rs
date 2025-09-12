@@ -171,11 +171,12 @@ fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
     let s = format!("{:?}", e);
     // Trim to avoid flooding the footer
     if s.len() > MAX_ERROR_SUMMARY_LEN {
-        // Truncate by character boundary without allocating per-char
-        let end = s
-            .char_indices()
-            .nth(MAX_ERROR_SUMMARY_LEN)
-            .map_or(s.len(), |(i, _)| i);
+        // Efficiently truncate by UTF-8 character boundary without scanning the entire string by chars.
+        // We cap by byte length and back up to the nearest char boundary.
+        let mut end = s.len().min(MAX_ERROR_SUMMARY_LEN);
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
         s[..end].to_string() + "..."
     } else {
         s
@@ -249,8 +250,8 @@ impl Client for AwsSdkClient {
 
     async fn load_all_buckets(&self) -> Result<Vec<BucketItem>> {
         // S3 ListBuckets is a global operation; forcing a specific region here can
-        // cause failures with some endpoints. Rely on SDK defaults and filter
-        // client-side if needed.
+        // cause failures with some endpoints. Rely on SDK defaults.
+        // Note: Client-side filtering is not currently implemented; add filtering here if needed in the future.
         let list_buckets_result = self.client.list_buckets().send().await;
         let list_buckets_output = self.handle_s3_error(list_buckets_result, "load buckets")?;
 
