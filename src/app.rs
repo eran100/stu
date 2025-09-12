@@ -243,39 +243,46 @@ impl<C: Client> App<C> {
     }
 
     pub fn object_list_move_up(&mut self) {
-        // Special handling for GoToPath: when the page stack has exactly two pages
-        // (the Initializing page and a single ObjectList page), there is no parent
-        // ObjectList page to pop back to. In this case, we actively load the parent
-        // prefix instead of jumping back to the bucket list/root, stepping up one level.
-        if self.page_stack.len() == 2 {
-            // Determine if this is the GoToPath scenario by checking the bottom page type.
-            // If the bottom is not an ObjectList (i.e., Initializing or BucketList),
-            // then there is no parent page on the stack to pop back to.
-            let bottom_is_object_list =
-                matches!(self.page_stack.iter().next(), Some(Page::ObjectList(_)));
-            if !bottom_is_object_list {
-                if let Page::ObjectList(page) = self.page_stack.current_page() {
-                    if let Some(parent) = self.parent_prefix_of(page.current_dir_object_key()) {
-                        // Replace current page with parent: either from cache or via load.
-                        self.page_stack.pop();
-                        if let Some(items) = self.app_objects.get_object_items(&parent) {
-                            let parent_page = Page::of_object_list(
-                                items,
-                                parent,
-                                Rc::clone(&self.ctx),
-                                self.tx.clone(),
-                            );
-                            self.page_stack.push(parent_page);
-                        } else {
-                            self.tx.send(AppEventType::LoadObjects(parent));
-                            self.is_loading = true;
-                        }
-                        return;
+        // Backspace semantics:
+        // - If the page directly below the current ObjectList page is the parent directory
+        //   (normal navigation), just pop to it.
+        // - Otherwise (e.g., after GoToPath where no parent page exists on the stack),
+        //   step up one level by replacing the current page with its parent, loading from
+        //   cache if available or fetching if not.
+        if let Page::ObjectList(cur) = self.page_stack.current_page() {
+            if let Some(parent) = self.parent_prefix_of(cur.current_dir_object_key()) {
+                // Is the previous page already the parent ObjectList?
+                let mut parent_on_stack = false;
+                if let Some(Page::ObjectList(prev_ol)) = self.page_stack.iter().rev().nth(1) {
+                    let prev_key = prev_ol.current_dir_object_key();
+                    if prev_key.bucket_name == parent.bucket_name
+                        && prev_key.object_path == parent.object_path
+                    {
+                        parent_on_stack = true;
                     }
+                }
+
+                if !parent_on_stack {
+                    // Replace current page with parent: either from cache or via load.
+                    self.page_stack.pop();
+                    if let Some(items) = self.app_objects.get_object_items(&parent) {
+                        let parent_page = Page::of_object_list(
+                            items,
+                            parent,
+                            Rc::clone(&self.ctx),
+                            self.tx.clone(),
+                        );
+                        self.page_stack.push(parent_page);
+                    } else {
+                        self.tx.send(AppEventType::LoadObjects(parent));
+                        self.is_loading = true;
+                    }
+                    return;
                 }
             }
         }
 
+        // Default behavior
         if self.page_stack.len() == 1 && self.app_objects.get_bucket_items().len() == 1 {
             return;
         }
