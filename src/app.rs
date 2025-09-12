@@ -252,15 +252,12 @@ impl<C: Client> App<C> {
         if let Page::ObjectList(cur) = self.page_stack.current_page() {
             if let Some(parent) = self.parent_prefix_of(cur.current_dir_object_key()) {
                 // Is the previous page already the parent ObjectList?
-                let mut parent_on_stack = false;
-                if let Some(Page::ObjectList(prev_ol)) = self.page_stack.iter().rev().nth(1) {
-                    let prev_key = prev_ol.current_dir_object_key();
-                    if prev_key.bucket_name == parent.bucket_name
-                        && prev_key.object_path == parent.object_path
-                    {
-                        parent_on_stack = true;
-                    }
-                }
+                let parent_on_stack =
+                    if let Some(Page::ObjectList(prev_ol)) = self.page_stack.iter().rev().nth(1) {
+                        prev_ol.current_dir_object_key() == &parent
+                    } else {
+                        false
+                    };
 
                 if !parent_on_stack {
                     // Replace current page with parent: either from cache or via load.

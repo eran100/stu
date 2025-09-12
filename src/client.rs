@@ -158,7 +158,8 @@ impl AwsSdkClient {
 /// - "UnauthorizedException"
 /// - "ExpiredToken"
 fn is_sso_session_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> bool {
-    let s = format!("{} {:?}", e, e);
+    // Prefer Debug; it typically includes nested causes for AWS SDK errors.
+    let s = format!("{:?}", e);
     s.contains("Session token not found or invalid")
         || s.contains("invalid_grant")
         || s.contains("UnauthorizedException")
@@ -170,7 +171,12 @@ fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
     let s = format!("{:?}", e);
     // Trim to avoid flooding the footer
     if s.len() > MAX_ERROR_SUMMARY_LEN {
-        s.chars().take(MAX_ERROR_SUMMARY_LEN).collect::<String>() + "..."
+        // Truncate by character boundary without allocating per-char
+        let end = s
+            .char_indices()
+            .nth(MAX_ERROR_SUMMARY_LEN)
+            .map_or(s.len(), |(i, _)| i);
+        s[..end].to_string() + "..."
     } else {
         s
     }
