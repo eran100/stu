@@ -248,13 +248,28 @@ impl<C: Client> App<C> {
         // ObjectList page to pop back to. In this case, we actively load the parent
         // prefix instead of jumping back to the bucket list/root, stepping up one level.
         if self.page_stack.len() == 2 {
-            if let Page::ObjectList(page) = self.page_stack.current_page() {
-                if let Some(parent) = self.parent_prefix_of(page.current_dir_object_key()) {
-                    // Only load parent if it isn't cached yet (GoToPath scenario); otherwise pop.
-                    if self.app_objects.get_object_items(&parent).is_none() {
+            // Determine if this is the GoToPath scenario by checking the bottom page type.
+            // If the bottom is not an ObjectList (i.e., Initializing or BucketList),
+            // then there is no parent page on the stack to pop back to.
+            let bottom_is_object_list =
+                matches!(self.page_stack.iter().next(), Some(Page::ObjectList(_)));
+            if !bottom_is_object_list {
+                if let Page::ObjectList(page) = self.page_stack.current_page() {
+                    if let Some(parent) = self.parent_prefix_of(page.current_dir_object_key()) {
+                        // Replace current page with parent: either from cache or via load.
                         self.page_stack.pop();
-                        self.tx.send(AppEventType::LoadObjects(parent));
-                        self.is_loading = true;
+                        if let Some(items) = self.app_objects.get_object_items(&parent) {
+                            let parent_page = Page::of_object_list(
+                                items,
+                                parent,
+                                Rc::clone(&self.ctx),
+                                self.tx.clone(),
+                            );
+                            self.page_stack.push(parent_page);
+                        } else {
+                            self.tx.send(AppEventType::LoadObjects(parent));
+                            self.is_loading = true;
+                        }
                         return;
                     }
                 }
