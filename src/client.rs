@@ -184,17 +184,18 @@ fn summarize_error<E: std::fmt::Debug + std::fmt::Display>(e: &E) -> String {
 }
 
 fn sso_hint(cli_profile: &Option<String>) -> String {
-    // Prefer explicit CLI flag, then environment variables
-    let active = cli_profile
-        .as_ref()
-        .cloned()
-        .or_else(|| var("AWS_PROFILE").ok())
-        .or_else(|| var("AWS_DEFAULT_PROFILE").ok());
-
-    match active {
-        Some(p) => format!("aws sso login --profile {}", p),
-        None => "aws sso login".to_string(),
+    // Prefer explicit CLI flag, then environment variables.
+    // Avoid cloning when CLI profile is present by borrowing as &str.
+    if let Some(p) = cli_profile.as_deref() {
+        return format!("aws sso login --profile {}", p);
     }
+    if let Ok(p) = var("AWS_PROFILE") {
+        return format!("aws sso login --profile {}", p);
+    }
+    if let Ok(p) = var("AWS_DEFAULT_PROFILE") {
+        return format!("aws sso login --profile {}", p);
+    }
+    "aws sso login".to_string()
 }
 
 impl AwsSdkClient {
